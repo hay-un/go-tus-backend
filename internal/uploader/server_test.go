@@ -3,6 +3,7 @@ package uploader
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -113,14 +115,14 @@ func TestNewHandler_Creation(t *testing.T) {
 	mockS3 := new(MockS3Client)
 	// We only mock what's needed for initialization or checking existence if any
 	
-	handler, err := NewHandler("test-bucket", mockS3)
+	handler, err := NewTusHandler("test-bucket", mockS3)
 	assert.NoError(t, err)
 	assert.NotNil(t, handler)
 }
 
 func TestTusCreation_HappyPath(t *testing.T) {
 	mockS3 := new(MockS3Client)
-	handler, _ := NewHandler("test-bucket", mockS3)
+	handler, _ := NewTusHandler("test-bucket", mockS3)
 
 	// s3store.NewUpload flow:
 	// 1. CreateMultipartUpload to get UploadId
@@ -137,13 +139,16 @@ func TestTusCreation_HappyPath(t *testing.T) {
 	}), mock.Anything).Return(&s3.PutObjectOutput{}, nil)
 
 	// Perform Request
+	// Note: With UnroutedHandler, we don't necessarily need the mux for PostFile
+	// but it's good for end-to-end testing if we use a mux in the real app.
+	// For this test, we call PostFile directly.
 	req, _ := http.NewRequest("POST", "/files/", nil)
 	req.Header.Set("Tus-Resumable", "1.0.0")
 	req.Header.Set("Upload-Length", "100")
 	req.Header.Set("Upload-Metadata", "filename dGVzdC50eHQ=")
 
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
+	handler.PostFile(rr, req)
 
 	// Assertions
 	assert.Equal(t, http.StatusCreated, rr.Code)
@@ -153,7 +158,7 @@ func TestTusCreation_HappyPath(t *testing.T) {
 
 func TestTusCreation_StorageFailure(t *testing.T) {
 	mockS3 := new(MockS3Client)
-	handler, _ := NewHandler("test-bucket", mockS3)
+	handler, _ := NewTusHandler("test-bucket", mockS3)
 
 	// Simulate S3 Error during Multipart creation (e.g. Storage Full/Permissions)
 	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("s3: ServiceUnavailable"))
@@ -168,11 +173,44 @@ func TestTusCreation_StorageFailure(t *testing.T) {
 	req.Header.Set("Upload-Length", "100")
 
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
+	handler.PostFile(rr, req)
 
 	// Assertions
 	// Tusd usually returns 500 for storage errors
 	assert.NotEqual(t, http.StatusCreated, rr.Code)
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestListFiles(t *testing.T) {
+	mockS3 := new(MockS3Client)
+	app := &App{
+		S3Client:   mockS3,
+		BucketName: "test-bucket",
+		S3Endpoint: "http://localhost:9000",
+	}
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents: []types.Object{
+			{Key: aws.String("file1.mp3"), Size: aws.Int64(1000)},
+			{Key: aws.String("file1.mp3.info"), Size: aws.Int64(100)},
+		},
+	}, nil)
+
+	// Mock GetObject for .info file
+	infoContent := `{"MetaData": {"filename": "My Song.mp3"}}`
+	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
+		return *input.Key == "file1.mp3.info"
+	}), mock.Anything).Return(&s3.GetObjectOutput{
+		Body: io.NopCloser(strings.NewReader(infoContent)),
+	}, nil)
+
+	req, _ := http.NewRequest("GET", "/files/", nil)
+	rr := httptest.NewRecorder()
+	app.ListFilesHandler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "My Song.mp3")
+	assert.Contains(t, rr.Body.String(), "http://localhost:9000/test-bucket/file1.mp3")
 	mockS3.AssertExpectations(t)
 }
