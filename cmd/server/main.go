@@ -24,27 +24,14 @@ func main() {
 
 	// Wrap the uploader handler to support GET for listing
 	filesHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// listing
+		// Specific check for the listing endpoint
 		if r.Method == http.MethodGet && r.URL.Path == "/files/" {
 			app.ListFilesHandler(w, r)
 			return
 		}
 
-		// Tus protocol
-		switch r.Method {
-		case http.MethodPost:
-			app.TusHandler.PostFile(w, r)
-		case http.MethodHead:
-			app.TusHandler.HeadFile(w, r)
-		case http.MethodPatch:
-			app.TusHandler.PatchFile(w, r)
-		case http.MethodDelete:
-			app.TusHandler.DelFile(w, r)
-		case http.MethodGet:
-			app.TusHandler.GetFile(w, r)
-		default:
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		}
+		// Fallback to Tus handler for everything else
+		app.TusHandler.ServeHTTP(w, r)
 	})
 
 	http.Handle("/files/", CORS(filesHandler))
@@ -66,8 +53,13 @@ func CORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD")
 		w.Header().Set("Access-Control-Allow-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Content-Type, Upload-Defer-Length, Upload-Concat, Location, Upload-Offset, Upload-Length, X-HTTP-Method-Override")
 		w.Header().Set("Access-Control-Expose-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Content-Type, Upload-Defer-Length, Upload-Concat, Location, Upload-Offset, Upload-Length")
+		
+		if r.Method == http.MethodOptions {
+			// Preflight requests shouldn't reach the inner handler if it's just for CORS
+			// but TUS uses OPTIONS for discovery. We'll set the CORS headers and then
+			// let the inner handler settle the TUS part.
+		}
 
-		// Let the handler handle the request (including OPTIONS)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -81,40 +81,39 @@ func (m *MockS3Client) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV
 	return args.Get(0).(*s3.ListObjectsV2Output), args.Error(1)
 }
 func (m *MockS3Client) HeadObject(ctx context.Context, input *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-    args := m.Called(ctx, input, optFns)
-    if args.Get(0) == nil {
-        return nil, args.Error(1)
-    }
-    return args.Get(0).(*s3.HeadObjectOutput), args.Error(1)
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.HeadObjectOutput), args.Error(1)
 }
 func (m *MockS3Client) DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-    args := m.Called(ctx, input, optFns)
-    if args.Get(0) == nil {
-        return nil, args.Error(1)
-    }
-    return args.Get(0).(*s3.DeleteObjectOutput), args.Error(1)
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.DeleteObjectOutput), args.Error(1)
 }
 func (m *MockS3Client) DeleteObjects(ctx context.Context, input *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
-    args := m.Called(ctx, input, optFns)
-    if args.Get(0) == nil {
-        return nil, args.Error(1)
-    }
-    return args.Get(0).(*s3.DeleteObjectsOutput), args.Error(1)
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.DeleteObjectsOutput), args.Error(1)
 }
 
-
 func (m *MockS3Client) UploadPartCopy(ctx context.Context, input *s3.UploadPartCopyInput, optFns ...func(*s3.Options)) (*s3.UploadPartCopyOutput, error) {
-    args := m.Called(ctx, input, optFns)
-    if args.Get(0) == nil {
-        return nil, args.Error(1)
-    }
-    return args.Get(0).(*s3.UploadPartCopyOutput), args.Error(1)
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.UploadPartCopyOutput), args.Error(1)
 }
 
 func TestNewHandler_Creation(t *testing.T) {
 	mockS3 := new(MockS3Client)
 	// We only mock what's needed for initialization or checking existence if any
-	
+
 	handler, err := NewTusHandler("test-bucket", mockS3)
 	assert.NoError(t, err)
 	assert.NotNil(t, handler)
@@ -139,16 +138,17 @@ func TestTusCreation_HappyPath(t *testing.T) {
 	}), mock.Anything).Return(&s3.PutObjectOutput{}, nil)
 
 	// Perform Request
-	// Note: With UnroutedHandler, we don't necessarily need the mux for PostFile
-	// but it's good for end-to-end testing if we use a mux in the real app.
-	// For this test, we call PostFile directly.
+	mux := http.NewServeMux()
+	mux.Handle("/files/", handler)
+
+	// In tusd/v2 with BasePath: "/files/", we MUST use the trailing slash
 	req, _ := http.NewRequest("POST", "/files/", nil)
 	req.Header.Set("Tus-Resumable", "1.0.0")
 	req.Header.Set("Upload-Length", "100")
 	req.Header.Set("Upload-Metadata", "filename dGVzdC50eHQ=")
 
 	rr := httptest.NewRecorder()
-	handler.PostFile(rr, req)
+	mux.ServeHTTP(rr, req)
 
 	// Assertions
 	assert.Equal(t, http.StatusCreated, rr.Code)
@@ -164,7 +164,7 @@ func TestTusCreation_StorageFailure(t *testing.T) {
 	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("s3: ServiceUnavailable"))
 
 	// We might also need to expect PutObject if it happens before, but usually NewUpload does Multipart first or parallel.
-	// If PutObject is called first, we should allow it or fail it. 
+	// If PutObject is called first, we should allow it or fail it.
 	// Let's assume CreateMultipartUpload is the failure point.
 
 	// Perform Request
@@ -173,7 +173,7 @@ func TestTusCreation_StorageFailure(t *testing.T) {
 	req.Header.Set("Upload-Length", "100")
 
 	rr := httptest.NewRecorder()
-	handler.PostFile(rr, req)
+	handler.ServeHTTP(rr, req)
 
 	// Assertions
 	// Tusd usually returns 500 for storage errors

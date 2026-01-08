@@ -25,7 +25,7 @@ type S3API interface {
 
 // App holds the dependencies for the uploader service.
 type App struct {
-	TusHandler *handler.UnroutedHandler
+	TusHandler http.Handler
 	S3Client   S3API
 	BucketName string
 	S3Endpoint string
@@ -79,7 +79,7 @@ func NewAppFromEnv() (*App, error) {
 }
 
 // NewTusHandler creates a Tus handler with a provided S3 client.
-func NewTusHandler(bucketName string, s3Client s3store.S3API) (*handler.UnroutedHandler, error) {
+func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, error) {
 	// 3. Create S3 Store
 	store := s3store.New(bucketName, s3Client)
 
@@ -87,16 +87,17 @@ func NewTusHandler(bucketName string, s3Client s3store.S3API) (*handler.Unrouted
 	composer := handler.NewStoreComposer()
 	store.UseIn(composer)
 
-	tusHandler, err := handler.NewUnroutedHandler(handler.Config{
-		BasePath:              "/files/",
-		StoreComposer:         composer,
-		NotifyCompleteUploads: false,
+	tusHandler, err := handler.NewHandler(handler.Config{
+		BasePath:                "/files/",
+		StoreComposer:           composer,
+		NotifyCompleteUploads:   false,
+		RespectForwardedHeaders: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unable to create tus handler: %w", err)
 	}
 
-	return tusHandler, nil
+	return http.StripPrefix("/files/", tusHandler), nil
 }
 
 // ListFilesHandler returns a JSON list of files in the bucket.
@@ -120,7 +121,7 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 	for _, obj := range output.Contents {
 		key := aws.ToString(obj.Key)
 		// Only include files (not directories or tus info files ending in .info)
-		if key != "" && !((len(key) > 5 && key[len(key)-5:] == ".info")) {
+		if key != "" && !(len(key) > 5 && key[len(key)-5:] == ".info") {
 			// Try to get metadata from .info file
 			name := key
 			infoKey := key + ".info"
