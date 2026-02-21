@@ -57,7 +57,7 @@ func TestResumableUpload_E2E(t *testing.T) {
 	resp.Body.Close()
 
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
-	
+
 	newOffsetStr := resp.Header.Get("Upload-Offset")
 	newOffset, err := strconv.Atoi(newOffsetStr)
 	require.NoError(t, err)

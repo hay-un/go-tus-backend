@@ -36,6 +36,10 @@ func main() {
 
 	http.Handle("/files/", CORS(filesHandler))
 
+	// Bucket management routes
+	http.Handle("/buckets", CORS(http.HandlerFunc(app.BucketsHandler)))
+	http.Handle("/buckets/", CORS(http.HandlerFunc(app.BucketItemHandler)))
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -53,7 +57,7 @@ func CORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD")
 		w.Header().Set("Access-Control-Allow-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Content-Type, Upload-Defer-Length, Upload-Concat, Location, Upload-Offset, Upload-Length, X-HTTP-Method-Override")
 		w.Header().Set("Access-Control-Expose-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Content-Type, Upload-Defer-Length, Upload-Concat, Location, Upload-Offset, Upload-Length")
-		
+
 		if r.Method == http.MethodOptions {
 			// Preflight requests shouldn't reach the inner handler if it's just for CORS
 			// but TUS uses OPTIONS for discovery. We'll set the CORS headers and then

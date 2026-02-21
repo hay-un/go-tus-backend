@@ -110,6 +110,46 @@ func (m *MockS3Client) UploadPartCopy(ctx context.Context, input *s3.UploadPartC
 	return args.Get(0).(*s3.UploadPartCopyOutput), args.Error(1)
 }
 
+func (m *MockS3Client) CreateBucket(ctx context.Context, input *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.CreateBucketOutput), args.Error(1)
+}
+
+func (m *MockS3Client) DeleteBucket(ctx context.Context, input *s3.DeleteBucketInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.DeleteBucketOutput), args.Error(1)
+}
+
+func (m *MockS3Client) ListBuckets(ctx context.Context, input *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.ListBucketsOutput), args.Error(1)
+}
+
+func (m *MockS3Client) HeadBucket(ctx context.Context, input *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.HeadBucketOutput), args.Error(1)
+}
+
+func (m *MockS3Client) CopyObject(ctx context.Context, input *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.CopyObjectOutput), args.Error(1)
+}
+
 func TestNewHandler_Creation(t *testing.T) {
 	mockS3 := new(MockS3Client)
 	// We only mock what's needed for initialization or checking existence if any
