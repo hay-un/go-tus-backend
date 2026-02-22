@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"strconv"
 	"testing"
@@ -18,6 +19,13 @@ const (
 )
 
 func TestResumableUpload_E2E(t *testing.T) {
+	// Create a dedicated bucket for this test
+	bucketName := uniqueName("resume")
+	resp0 := doPost(t, backendURL+"/buckets", fmt.Sprintf(`{"name":%q}`, bucketName))
+	defer resp0.Body.Close()
+	require.Equal(t, http.StatusCreated, resp0.StatusCode)
+	defer doDelete(t, fmt.Sprintf("%s/buckets/%s", backendURL, bucketName))
+
 	// 1. Prepare Data
 	content := []byte("Hello, this is a test data for resumable upload integration testing.")
 	totalSize := len(content)
@@ -27,12 +35,16 @@ func TestResumableUpload_E2E(t *testing.T) {
 		Timeout: 30 * time.Second,
 	}
 
-	// 2. Create Upload (POST)
+	// 2. Create Upload (POST) — must include bucket in metadata
 	req, err := http.NewRequest("POST", baseURL, nil)
 	require.NoError(t, err)
 	req.Header.Set("Tus-Resumable", "1.0.0")
 	req.Header.Set("Upload-Length", strconv.Itoa(totalSize))
-	req.Header.Set("Upload-Metadata", "filename dGVzdF9yZXN1bWUudHh0") // filename test_resume.txt
+	// filename=test_resume.txt, bucket=<bucketName> (base64-encoded)
+	req.Header.Set("Upload-Metadata", fmt.Sprintf(
+		"filename dGVzdF9yZXN1bWUudHh0,bucket %s",
+		encodeBase64(bucketName),
+	))
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)

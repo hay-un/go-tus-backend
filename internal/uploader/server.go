@@ -2,16 +2,23 @@ package uploader
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/s3store"
 )
@@ -31,10 +38,11 @@ type S3API interface {
 
 // App holds the dependencies for the uploader service.
 type App struct {
-	TusHandler http.Handler
-	S3Client   S3API
-	BucketName string
-	S3Endpoint string
+	TusHandler  http.Handler
+	S3Client    S3API
+	BucketName  string
+	S3Endpoint  string
+	tusHandlers sync.Map // map[string]http.Handler — per-user-bucket TUS handlers
 }
 
 // NewAppFromEnv initializes the App using environment variables.
@@ -84,12 +92,10 @@ func NewAppFromEnv() (*App, error) {
 	}, nil
 }
 
-// NewTusHandler creates a Tus handler with a provided S3 client.
+// NewTusHandler creates a Tus handler pointed at the root bucket (legacy/fallback).
 func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, error) {
-	// 3. Create S3 Store
 	store := s3store.New(bucketName, s3Client)
 
-	// 4. Create Tus Handler
 	composer := handler.NewStoreComposer()
 	store.UseIn(composer)
 
@@ -106,64 +112,306 @@ func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, err
 	return http.StripPrefix("/files/", tusHandler), nil
 }
 
-// ListFilesHandler returns a JSON list of files in the bucket.
-func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
-	output, err := a.S3Client.ListObjectsV2(r.Context(), &s3.ListObjectsV2Input{
-		Bucket: aws.String(a.BucketName),
+// NewTusHandlerForBucket creates a Tus handler with a user-bucket-specific BasePath.
+// The returned handler expects paths like /files/<bucket>/<upload-id>.
+func NewTusHandlerForBucket(bucketName string, s3Client s3store.S3API) (http.Handler, error) {
+	store := s3store.New(bucketName, s3Client)
+
+	composer := handler.NewStoreComposer()
+	store.UseIn(composer)
+
+	basePath := "/files/" + bucketName + "/"
+	tusHandler, err := handler.NewHandler(handler.Config{
+		BasePath:                basePath,
+		StoreComposer:           composer,
+		NotifyCompleteUploads:   false,
+		RespectForwardedHeaders: true,
 	})
 	if err != nil {
-		http.Error(w, fmt.Errorf("failed to list objects: %w", err).Error(), http.StatusInternalServerError)
+		return nil, fmt.Errorf("unable to create tus handler for bucket %q: %w", bucketName, err)
+	}
+
+	return http.StripPrefix(basePath, tusHandler), nil
+}
+
+// GetTusHandlerForBucket returns a cached per-bucket TUS handler, creating it if needed.
+func (a *App) GetTusHandlerForBucket(bucket string) (http.Handler, error) {
+	if h, ok := a.tusHandlers.Load(bucket); ok {
+		return h.(http.Handler), nil
+	}
+
+	h, err := NewTusHandlerForBucket(bucket, a.S3Client)
+	if err != nil {
+		return nil, err
+	}
+
+	actual, _ := a.tusHandlers.LoadOrStore(bucket, h)
+	return actual.(http.Handler), nil
+}
+
+// ExtractBucketFromTUSMetadata parses the Upload-Metadata header and returns the
+// base64-decoded value for the "bucket" key. Returns "" if not found or invalid.
+func ExtractBucketFromTUSMetadata(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		kv := strings.SplitN(part, " ", 2)
+		if len(kv) == 2 && kv[0] == "bucket" {
+			decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(kv[1]))
+			if err == nil {
+				return string(decoded)
+			}
+		}
+	}
+	return ""
+}
+
+// FilesHandler is the main dispatcher for all /files/ routes.
+//
+//	GET  /files/                    → ListFilesHandler (requires ?bucket=)
+//	GET  /files/<bucket>/<key>      → DownloadFileHandler
+//	DELETE /files/<bucket>/<key>    → DeleteFileHandler
+//	POST /files/ (TUS)              → routes to per-bucket TUS handler
+//	PATCH/HEAD /files/<bucket>/<id> → routes to per-bucket TUS handler
+func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
+	isTUS := r.Header.Get("Tus-Resumable") != ""
+	path := r.URL.Path
+
+	// ── Non-TUS: GET /files/ → list files ──────────────────────────────────
+	if r.Method == http.MethodGet && path == "/files/" && !isTUS {
+		a.ListFilesHandler(w, r)
+		return
+	}
+
+	// Parse path segments after /files/
+	rest := strings.TrimPrefix(path, "/files/")
+	parts := strings.SplitN(rest, "/", 2)
+	hasTwoParts := len(parts) == 2 && parts[0] != "" && parts[1] != ""
+
+	// ── Non-TUS: /files/<bucket>/<key> ─────────────────────────────────────
+	if !isTUS && hasTwoParts {
+		bucket, key := parts[0], parts[1]
+		switch r.Method {
+		case http.MethodGet:
+			a.DownloadFileHandler(w, r, bucket, key)
+			return
+		case http.MethodDelete:
+			a.DeleteFileHandler(w, r, bucket, key)
+			return
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+	}
+
+	// ── TUS: POST /files/ → create upload in user bucket ───────────────────
+	if isTUS && r.Method == http.MethodPost && path == "/files/" {
+		bucket := ExtractBucketFromTUSMetadata(r.Header.Get("Upload-Metadata"))
+		if bucket == "" {
+			jsonError(w, "Upload-Metadata must include bucket field", http.StatusBadRequest)
+			return
+		}
+
+		h, err := a.GetTusHandlerForBucket(bucket)
+		if err != nil {
+			jsonError(w, "failed to initialize upload handler", http.StatusInternalServerError)
+			return
+		}
+
+		// Rewrite path so the per-bucket handler receives /files/<bucket>/
+		r.URL.Path = "/files/" + bucket + "/"
+		h.ServeHTTP(w, r)
+		return
+	}
+
+	// ── TUS: PATCH / HEAD / OPTIONS on /files/<bucket>/<upload-id> ─────────
+	if isTUS && hasTwoParts {
+		bucket := parts[0]
+		h, err := a.GetTusHandlerForBucket(bucket)
+		if err != nil {
+			jsonError(w, "failed to initialize upload handler", http.StatusInternalServerError)
+			return
+		}
+		h.ServeHTTP(w, r)
+		return
+	}
+
+	// Fallback: pass to root TUS handler (OPTIONS discovery, etc.)
+	a.TusHandler.ServeHTTP(w, r)
+}
+
+// ListFilesHandler returns a JSON list of files in the specified user bucket.
+// Requires ?bucket=<name> query parameter.
+func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
+	bucket := r.URL.Query().Get("bucket")
+	if bucket == "" {
+		jsonError(w, "bucket query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	output, err := a.S3Client.ListObjectsV2(r.Context(), &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		if isBucketNotFound(err) {
+			jsonError(w, fmt.Sprintf("bucket %q not found", bucket), http.StatusNotFound)
+			return
+		}
+		jsonError(w, fmt.Sprintf("failed to list objects: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	type FileInfo struct {
-		Key  string `json:"key"`
-		Name string `json:"name"`
-		Size int64  `json:"size"`
-		URL  string `json:"url"`
+		Key          string    `json:"key"`
+		Name         string    `json:"name"`
+		Size         int64     `json:"size"`
+		LastModified time.Time `json:"lastModified"`
+		URL          string    `json:"url"`
 	}
 
 	files := make([]FileInfo, 0)
 	for _, obj := range output.Contents {
 		key := aws.ToString(obj.Key)
-		// Only include files (not directories or tus info files ending in .info)
-		if key != "" && !(len(key) > 5 && key[len(key)-5:] == ".info") {
-			// Try to get metadata from .info file
-			name := key
-			infoKey := key + ".info"
-			infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
-				Bucket: aws.String(a.BucketName),
-				Key:    aws.String(infoKey),
-			})
-			if err == nil {
-				var info struct {
-					MetaData map[string]string `json:"MetaData"`
-				}
-				if err := json.NewDecoder(infoObj.Body).Decode(&info); err == nil {
-					if filename, ok := info.MetaData["filename"]; ok {
-						name = filename
-					}
-				}
-				infoObj.Body.Close()
-			}
-
-			// Get the public S3 URL (using localhost for frontend convenience if endpoint is internal)
-			url := fmt.Sprintf("%s/%s/%s", a.S3Endpoint, a.BucketName, key)
-			// Replace internal minio host with localhost for the browser
-			url = strings.Replace(url, "http://minio:9000", "http://localhost:9000", 1)
-
-			files = append(files, FileInfo{
-				Key:  key,
-				Name: name,
-				Size: aws.ToInt64(obj.Size),
-				URL:  url,
-			})
+		// Skip .info sidecar files and empty keys
+		if key == "" || strings.HasSuffix(key, ".info") {
+			continue
 		}
+
+		// Try to read original filename from TUS .info sidecar
+		name := key
+		infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key + ".info"),
+		})
+		if err == nil {
+			var info struct {
+				MetaData map[string]string `json:"MetaData"`
+			}
+			if jsonErr := json.NewDecoder(infoObj.Body).Decode(&info); jsonErr == nil {
+				if filename, ok := info.MetaData["filename"]; ok && filename != "" {
+					name = filename
+				}
+			}
+			infoObj.Body.Close()
+		}
+
+		var lastModified time.Time
+		if obj.LastModified != nil {
+			lastModified = *obj.LastModified
+		}
+
+		// Backend proxy URL — frontend calls this to download
+		downloadURL := fmt.Sprintf("/files/%s/%s", bucket, key)
+
+		files = append(files, FileInfo{
+			Key:          key,
+			Name:         name,
+			Size:         aws.ToInt64(obj.Size),
+			LastModified: lastModified,
+			URL:          downloadURL,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if err := json.NewEncoder(w).Encode(files); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+// DownloadFileHandler streams a file from the user bucket to the client.
+// GET /files/<bucket>/<key>
+func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// Retrieve original filename from TUS .info sidecar (best-effort)
+	filename := key
+	infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key + ".info"),
+	})
+	if err == nil {
+		var info struct {
+			MetaData map[string]string `json:"MetaData"`
+		}
+		if jsonErr := json.NewDecoder(infoObj.Body).Decode(&info); jsonErr == nil {
+			if fn, ok := info.MetaData["filename"]; ok && fn != "" {
+				filename = fn
+			}
+		}
+		infoObj.Body.Close()
+	}
+
+	// Get the actual file object
+	obj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isObjectNotFound(err) {
+			jsonError(w, "file not found", http.StatusNotFound)
+			return
+		}
+		jsonError(w, fmt.Sprintf("failed to retrieve file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer obj.Body.Close()
+
+	// Set response headers
+	contentType := "application/octet-stream"
+	if obj.ContentType != nil && *obj.ContentType != "" {
+		contentType = *obj.ContentType
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeFilename(filename)))
+	if obj.ContentLength != nil && *obj.ContentLength > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(*obj.ContentLength, 10))
+	}
+
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, obj.Body) //nolint:errcheck — client disconnect is expected
+}
+
+// DeleteFileHandler deletes a file and its TUS .info sidecar from the user bucket.
+// DELETE /files/<bucket>/<key>
+func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// Verify the file exists before attempting deletion
+	_, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isObjectNotFound(err) {
+			jsonError(w, "file not found", http.StatusNotFound)
+			return
+		}
+		jsonError(w, fmt.Sprintf("failed to check file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Batch-delete: file + .info sidecar
+	_, err = a.S3Client.DeleteObjects(r.Context(), &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{
+			Objects: []types.ObjectIdentifier{
+				{Key: aws.String(key)},
+				{Key: aws.String(key + ".info")},
+			},
+		},
+	})
+	if err != nil {
+		jsonError(w, fmt.Sprintf("failed to delete file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isObjectNotFound returns true when an S3 error indicates a missing key.
+func isObjectNotFound(err error) bool {
+	var nsk *types.NoSuchKey
+	var notFound *types.NotFound
+	return errors.As(err, &nsk) || errors.As(err, &notFound)
+}
+
+// sanitizeFilename removes characters that could break Content-Disposition headers.
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(`"`, `\"`, "\n", "", "\r", "")
+	return replacer.Replace(name)
 }
