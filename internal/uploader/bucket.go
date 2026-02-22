@@ -140,7 +140,10 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"name": body.Name})
+	json.NewEncoder(w).Encode(struct {
+		Name      string    `json:"name"`
+		CreatedAt time.Time `json:"created_at"`
+	}{Name: body.Name, CreatedAt: time.Now().UTC()})
 }
 
 // deleteBucketHandler handles DELETE /buckets/{name}.
@@ -294,5 +297,8 @@ func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldNam
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"name": body.NewName})
+	json.NewEncoder(w).Encode(struct {
+		Name      string    `json:"name"`
+		CreatedAt time.Time `json:"created_at"`
+	}{Name: body.NewName, CreatedAt: time.Now().UTC()})
 }

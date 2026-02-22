@@ -74,7 +74,11 @@ func TestCreateBucket_HappyPath(t *testing.T) {
 	app.BucketsHandler(rr, req)
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
-	assert.Contains(t, rr.Body.String(), "new-bucket")
+
+	var resp map[string]interface{}
+	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Equal(t, "new-bucket", resp["name"])
+	assert.NotEmpty(t, resp["created_at"], "created_at must be present so frontend can display the date without refresh")
 	mockS3.AssertExpectations(t)
 }
 
