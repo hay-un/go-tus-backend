@@ -16,7 +16,8 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockS3Client matches the s3store.S3API interface
+// MockS3Client satisfies the S3API interface for unit tests.
+// All methods delegate to testify/mock for expectation tracking.
 type MockS3Client struct {
 	mock.Mock
 }
@@ -52,6 +53,7 @@ func (m *MockS3Client) CreateMultipartUpload(ctx context.Context, input *s3.Crea
 	}
 	return args.Get(0).(*s3.CreateMultipartUploadOutput), args.Error(1)
 }
+
 func (m *MockS3Client) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -59,6 +61,7 @@ func (m *MockS3Client) CompleteMultipartUpload(ctx context.Context, input *s3.Co
 	}
 	return args.Get(0).(*s3.CompleteMultipartUploadOutput), args.Error(1)
 }
+
 func (m *MockS3Client) AbortMultipartUpload(ctx context.Context, input *s3.AbortMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -66,6 +69,7 @@ func (m *MockS3Client) AbortMultipartUpload(ctx context.Context, input *s3.Abort
 	}
 	return args.Get(0).(*s3.AbortMultipartUploadOutput), args.Error(1)
 }
+
 func (m *MockS3Client) UploadPart(ctx context.Context, input *s3.UploadPartInput, optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -73,6 +77,7 @@ func (m *MockS3Client) UploadPart(ctx context.Context, input *s3.UploadPartInput
 	}
 	return args.Get(0).(*s3.UploadPartOutput), args.Error(1)
 }
+
 func (m *MockS3Client) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -80,6 +85,7 @@ func (m *MockS3Client) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV
 	}
 	return args.Get(0).(*s3.ListObjectsV2Output), args.Error(1)
 }
+
 func (m *MockS3Client) HeadObject(ctx context.Context, input *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -87,6 +93,7 @@ func (m *MockS3Client) HeadObject(ctx context.Context, input *s3.HeadObjectInput
 	}
 	return args.Get(0).(*s3.HeadObjectOutput), args.Error(1)
 }
+
 func (m *MockS3Client) DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -94,6 +101,7 @@ func (m *MockS3Client) DeleteObject(ctx context.Context, input *s3.DeleteObjectI
 	}
 	return args.Get(0).(*s3.DeleteObjectOutput), args.Error(1)
 }
+
 func (m *MockS3Client) DeleteObjects(ctx context.Context, input *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	args := m.Called(ctx, input, optFns)
 	if args.Get(0) == nil {
@@ -152,15 +160,20 @@ func (m *MockS3Client) CopyObject(ctx context.Context, input *s3.CopyObjectInput
 
 // ── TUS handler creation ──────────────────────────────────────────────────────
 
-func TestNewHandler_Creation(t *testing.T) {
+func TestNewTusHandler_ShouldCreateHandler_WhenValidBucketAndClientProvided(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 
+	// Act
 	h, err := NewTusHandler("test-bucket", mockS3)
+
+	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, h)
 }
 
-func TestTusCreation_HappyPath(t *testing.T) {
+func TestTusHandler_ShouldReturn201WithLocation_WhenUploadIsInitiated(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	h, _ := NewTusHandler("test-bucket", mockS3)
 
@@ -181,49 +194,59 @@ func TestTusCreation_HappyPath(t *testing.T) {
 	req.Header.Set("Tus-Resumable", "1.0.0")
 	req.Header.Set("Upload-Length", "100")
 	req.Header.Set("Upload-Metadata", "filename dGVzdC50eHQ=")
-
 	rr := httptest.NewRecorder()
+
+	// Act
 	mux.ServeHTTP(rr, req)
 
+	// Assert
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	assert.NotEmpty(t, rr.Header().Get("Location"))
 	mockS3.AssertExpectations(t)
 }
 
-func TestTusCreation_StorageFailure(t *testing.T) {
+func TestTusHandler_ShouldReturn500_WhenS3IsUnavailable(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	h, _ := NewTusHandler("test-bucket", mockS3)
 
-	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("s3: ServiceUnavailable"))
+	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("s3: ServiceUnavailable"))
 
 	req, _ := http.NewRequest("POST", "/files/", nil)
 	req.Header.Set("Tus-Resumable", "1.0.0")
 	req.Header.Set("Upload-Length", "100")
-
 	rr := httptest.NewRecorder()
+
+	// Act
 	h.ServeHTTP(rr, req)
 
-	assert.NotEqual(t, http.StatusCreated, rr.Code)
+	// Assert
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 	mockS3.AssertExpectations(t)
 }
 
 // ── ListFilesHandler ──────────────────────────────────────────────────────────
 
-func TestListFiles_RequiresBucketParam(t *testing.T) {
+func TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
 	req, _ := http.NewRequest("GET", "/files/", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.ListFilesHandler(rr, req)
 
+	// Assert
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Contains(t, rr.Body.String(), "bucket query parameter is required")
 	mockS3.AssertNotCalled(t, "ListObjectsV2")
 }
 
-func TestListFiles_WithBucketParam(t *testing.T) {
+func TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
@@ -236,27 +259,29 @@ func TestListFiles_WithBucketParam(t *testing.T) {
 		},
 	}, nil)
 
-	infoContent := `{"MetaData": {"filename": "movie.mp4"}}`
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
 		return aws.ToString(input.Bucket) == "my-videos" && aws.ToString(input.Key) == "abc123.info"
 	}), mock.Anything).Return(&s3.GetObjectOutput{
-		Body: io.NopCloser(strings.NewReader(infoContent)),
+		Body: io.NopCloser(strings.NewReader(`{"MetaData": {"filename": "movie.mp4"}}`)),
 	}, nil)
 
 	req, _ := http.NewRequest("GET", "/files/?bucket=my-videos", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.ListFilesHandler(rr, req)
 
+	// Assert
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), "movie.mp4")
 	assert.Contains(t, rr.Body.String(), "abc123")
 	assert.Contains(t, rr.Body.String(), "/files/my-videos/abc123")
-	// .info sidecar must NOT appear in the list
-	assert.NotContains(t, rr.Body.String(), "abc123.info")
+	assert.NotContains(t, rr.Body.String(), "abc123.info", ".info sidecar must not appear in the listing")
 	mockS3.AssertExpectations(t)
 }
 
-func TestListFiles_BucketNotFound(t *testing.T) {
+func TestListFilesHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
@@ -265,25 +290,28 @@ func TestListFiles_BucketNotFound(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", "/files/?bucket=ghost-bucket", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.ListFilesHandler(rr, req)
 
+	// Assert
 	assert.Equal(t, http.StatusNotFound, rr.Code)
 	mockS3.AssertExpectations(t)
 }
 
 // ── DownloadFileHandler ───────────────────────────────────────────────────────
 
-func TestDownloadFileHandler_HappyPath(t *testing.T) {
+func TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
 	fileContent := "hello world"
 
-	infoContent := `{"MetaData": {"filename": "hello.txt"}}`
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
 		return aws.ToString(input.Key) == "abc123.info"
 	}), mock.Anything).Return(&s3.GetObjectOutput{
-		Body: io.NopCloser(strings.NewReader(infoContent)),
+		Body: io.NopCloser(strings.NewReader(`{"MetaData": {"filename": "hello.txt"}}`)),
 	}, nil)
 
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
@@ -296,8 +324,11 @@ func TestDownloadFileHandler_HappyPath(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", "/files/my-bucket/abc123", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.DownloadFileHandler(rr, req, "my-bucket", "abc123")
 
+	// Assert
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, fileContent, rr.Body.String())
 	assert.Contains(t, rr.Header().Get("Content-Disposition"), "hello.txt")
@@ -305,24 +336,26 @@ func TestDownloadFileHandler_HappyPath(t *testing.T) {
 	mockS3.AssertExpectations(t)
 }
 
-func TestDownloadFileHandler_FileNotFound(t *testing.T) {
+func TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
-	// .info not found
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
 		return aws.ToString(input.Key) == "ghost.info"
 	}), mock.Anything).Return(nil, &types.NoSuchKey{})
 
-	// Actual file not found
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
 		return aws.ToString(input.Key) == "ghost"
 	}), mock.Anything).Return(nil, &types.NoSuchKey{})
 
 	req, _ := http.NewRequest("GET", "/files/my-bucket/ghost", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.DownloadFileHandler(rr, req, "my-bucket", "ghost")
 
+	// Assert
 	assert.Equal(t, http.StatusNotFound, rr.Code)
 	assert.Contains(t, rr.Body.String(), "file not found")
 	mockS3.AssertExpectations(t)
@@ -330,7 +363,8 @@ func TestDownloadFileHandler_FileNotFound(t *testing.T) {
 
 // ── DeleteFileHandler ─────────────────────────────────────────────────────────
 
-func TestDeleteFileHandler_HappyPath(t *testing.T) {
+func TestDeleteFileHandler_ShouldDeleteFileAndSidecar_WhenFileExists(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
@@ -351,13 +385,17 @@ func TestDeleteFileHandler_HappyPath(t *testing.T) {
 
 	req, _ := http.NewRequest("DELETE", "/files/my-bucket/abc123", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.DeleteFileHandler(rr, req, "my-bucket", "abc123")
 
+	// Assert
 	assert.Equal(t, http.StatusNoContent, rr.Code)
 	mockS3.AssertExpectations(t)
 }
 
-func TestDeleteFileHandler_FileNotFound(t *testing.T) {
+func TestDeleteFileHandler_ShouldReturn404WithoutDeletion_WhenFileNotFound(t *testing.T) {
+	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
 
@@ -367,8 +405,11 @@ func TestDeleteFileHandler_FileNotFound(t *testing.T) {
 
 	req, _ := http.NewRequest("DELETE", "/files/my-bucket/ghost", nil)
 	rr := httptest.NewRecorder()
+
+	// Act
 	app.DeleteFileHandler(rr, req, "my-bucket", "ghost")
 
+	// Assert
 	assert.Equal(t, http.StatusNotFound, rr.Code)
 	assert.Contains(t, rr.Body.String(), "file not found")
 	mockS3.AssertNotCalled(t, "DeleteObjects")
@@ -377,29 +418,29 @@ func TestDeleteFileHandler_FileNotFound(t *testing.T) {
 
 // ── ExtractBucketFromTUSMetadata ──────────────────────────────────────────────
 
-func TestExtractBucketFromTUSMetadata(t *testing.T) {
+func TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid(t *testing.T) {
 	tests := []struct {
 		name     string
 		header   string
 		expected string
 	}{
 		{
-			name:     "bucket present with filename",
+			name:     "bucket present alongside filename",
 			header:   "filename dGVzdC50eHQ=,bucket bXktYnVja2V0",
 			expected: "my-bucket",
 		},
 		{
-			name:     "bucket only",
+			name:     "bucket is the only field",
 			header:   "bucket bXktdmlkZW9z",
 			expected: "my-videos",
 		},
 		{
-			name:     "no bucket field",
+			name:     "no bucket field present",
 			header:   "filename dGVzdC50eHQ=",
 			expected: "",
 		},
 		{
-			name:     "empty header",
+			name:     "empty header string",
 			header:   "",
 			expected: "",
 		},
@@ -407,7 +448,10 @@ func TestExtractBucketFromTUSMetadata(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Arrange + Act
 			got := ExtractBucketFromTUSMetadata(tt.header)
+
+			// Assert
 			assert.Equal(t, tt.expected, got)
 		})
 	}

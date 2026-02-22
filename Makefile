@@ -1,8 +1,19 @@
-.PHONY: test test-integration docker-build up down logs
+.PHONY: test test-coverage test-integration docker-build up down logs
 
 # ── Unit Tests ───────────────────────────────────────────────────────────────
 test:
-	go test ./... -v
+	go test ./internal/... -count=1 -v
+
+# ── Coverage Report (reporting only, does not fail the build) ─────────────────
+# Output: coverage.out (raw profile) + coverage.html (browser-viewable report)
+test-coverage:
+	go test ./internal/... -count=1 -coverprofile=coverage.out -covermode=atomic
+	@echo ""
+	@echo "── Coverage by function ──────────────────────────────────────────"
+	go tool cover -func=coverage.out
+	@echo ""
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Report generated: coverage.html"
 
 # ── Integration Tests ─────────────────────────────────────────────────────────
 # Spins up MinIO + backend via docker compose, waits until backend is healthy,

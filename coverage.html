@@ -1,0 +1,866 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>uploader: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">music-streaming/backend/internal/uploader/bucket.go (67.2%)</option>
+				
+				<option value="file1">music-streaming/backend/internal/uploader/cors.go (100.0%)</option>
+				
+				<option value="file2">music-streaming/backend/internal/uploader/server.go (49.1%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">no coverage</span>
+				<span class="cov1">low coverage</span>
+				<span class="cov2">*</span>
+				<span class="cov3">*</span>
+				<span class="cov4">*</span>
+				<span class="cov5">*</span>
+				<span class="cov6">*</span>
+				<span class="cov7">*</span>
+				<span class="cov8">*</span>
+				<span class="cov9">*</span>
+				<span class="cov10">high coverage</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package uploader
+
+import (
+        "encoding/json"
+        "errors"
+        "fmt"
+        "net/http"
+        "strings"
+        "time"
+
+        "github.com/aws/aws-sdk-go-v2/aws"
+        "github.com/aws/aws-sdk-go-v2/service/s3"
+        "github.com/aws/aws-sdk-go-v2/service/s3/types"
+)
+
+// jsonError writes a JSON error response.
+func jsonError(w http.ResponseWriter, message string, code int) <span class="cov10" title="9">{
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(code)
+        json.NewEncoder(w).Encode(map[string]string{"error": message})
+}</span>
+
+// isBucketNotFound checks whether an S3 error indicates a missing bucket.
+func isBucketNotFound(err error) bool <span class="cov6" title="4">{
+        var nf *types.NoSuchBucket
+        var notFound *types.NotFound
+        return errors.As(err, &amp;nf) || errors.As(err, &amp;notFound)
+}</span>
+
+// bucketExists probes a bucket with HeadBucket.
+// Returns (true, nil) if it exists, (false, nil) if not found, (false, err) on other errors.
+func (a *App) bucketExists(r *http.Request, name string) (bool, error) <span class="cov9" title="8">{
+        _, err := a.S3Client.HeadBucket(r.Context(), &amp;s3.HeadBucketInput{
+                Bucket: aws.String(name),
+        })
+        if err == nil </span><span class="cov7" title="5">{
+                return true, nil
+        }</span>
+        <span class="cov5" title="3">if isBucketNotFound(err) </span><span class="cov5" title="3">{
+                return false, nil
+        }</span>
+        <span class="cov0" title="0">return false, err</span>
+}
+
+// BucketsHandler dispatches GET and POST on /buckets.
+func (a *App) BucketsHandler(w http.ResponseWriter, r *http.Request) <span class="cov6" title="4">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov1" title="1">
+                a.ListBucketsHandler(w, r)</span>
+        case http.MethodPost:<span class="cov5" title="3">
+                a.CreateBucketHandler(w, r)</span>
+        default:<span class="cov0" title="0">
+                http.Error(w, "method not allowed", http.StatusMethodNotAllowed)</span>
+        }
+}
+
+// BucketItemHandler dispatches on /buckets/{name} and /buckets/{name}/rename.
+func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) <span class="cov7" title="5">{
+        // Strip the "/buckets/" prefix
+        rest := strings.TrimPrefix(r.URL.Path, "/buckets/")
+
+        if strings.HasSuffix(rest, "/rename") </span><span class="cov5" title="3">{
+                name := strings.TrimSuffix(rest, "/rename")
+                if r.Method != http.MethodPost </span><span class="cov0" title="0">{
+                        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+                        return
+                }</span>
+                <span class="cov5" title="3">a.renameBucketHandler(w, r, name)
+                return</span>
+        }
+
+        // /buckets/{name}
+        <span class="cov3" title="2">name := strings.TrimSuffix(rest, "/")
+        switch r.Method </span>{
+        case http.MethodDelete:<span class="cov3" title="2">
+                a.deleteBucketHandler(w, r, name)</span>
+        default:<span class="cov0" title="0">
+                http.Error(w, "method not allowed", http.StatusMethodNotAllowed)</span>
+        }
+}
+
+// ListBucketsHandler handles GET /buckets.
+func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) <span class="cov1" title="1">{
+        output, err := a.S3Client.ListBuckets(r.Context(), &amp;s3.ListBucketsInput{})
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to list buckets: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">type BucketInfo struct {
+                Name      string    `json:"name"`
+                CreatedAt time.Time `json:"created_at"`
+        }
+
+        buckets := make([]BucketInfo, 0, len(output.Buckets))
+        for _, b := range output.Buckets </span><span class="cov3" title="2">{
+                info := BucketInfo{Name: aws.ToString(b.Name)}
+                if b.CreationDate != nil </span><span class="cov3" title="2">{
+                        info.CreatedAt = *b.CreationDate
+                }</span>
+                <span class="cov3" title="2">buckets = append(buckets, info)</span>
+        }
+
+        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(buckets)</span>
+}
+
+// CreateBucketHandler handles POST /buckets.
+// Returns 409 if a bucket with the same name already exists.
+func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) <span class="cov5" title="3">{
+        var body struct {
+                Name string `json:"name"`
+        }
+        if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, "invalid JSON body", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov5" title="3">if strings.TrimSpace(body.Name) == "" </span><span class="cov1" title="1">{
+                jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
+                return
+        }</span>
+
+        // Duplicate check
+        <span class="cov3" title="2">exists, err := a.bucketExists(r, body.Name)
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+        <span class="cov3" title="2">if exists </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("bucket %q already exists", body.Name), http.StatusConflict)
+                return
+        }</span>
+
+        <span class="cov1" title="1">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
+                Bucket: aws.String(body.Name),
+        }); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusCreated)
+        json.NewEncoder(w).Encode(struct {
+                Name      string    `json:"name"`
+                CreatedAt time.Time `json:"created_at"`
+        }{Name: body.Name, CreatedAt: time.Now().UTC()})</span>
+}
+
+// deleteBucketHandler handles DELETE /buckets/{name}.
+// It cascade-deletes all objects inside before removing the bucket.
+func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name string) <span class="cov3" title="2">{
+        if name == "" </span><span class="cov0" title="0">{
+                jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
+                return
+        }</span>
+
+        // Verify bucket exists
+        <span class="cov3" title="2">exists, err := a.bucketExists(r, name)
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+        <span class="cov3" title="2">if !exists </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("bucket %q not found", name), http.StatusNotFound)
+                return
+        }</span>
+
+        // List and delete all objects (S3 requires empty bucket before deletion)
+        <span class="cov1" title="1">listOut, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+                Bucket: aws.String(name),
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to list objects: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">if len(listOut.Contents) &gt; 0 </span><span class="cov1" title="1">{
+                objectIds := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
+                for _, obj := range listOut.Contents </span><span class="cov3" title="2">{
+                        objectIds = append(objectIds, types.ObjectIdentifier{Key: obj.Key})
+                }</span>
+                <span class="cov1" title="1">if _, err := a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
+                        Bucket: aws.String(name),
+                        Delete: &amp;types.Delete{Objects: objectIds},
+                }); err != nil </span><span class="cov0" title="0">{
+                        jsonError(w, fmt.Sprintf("failed to delete objects: %v", err), http.StatusInternalServerError)
+                        return
+                }</span>
+        }
+
+        <span class="cov1" title="1">if _, err := a.S3Client.DeleteBucket(r.Context(), &amp;s3.DeleteBucketInput{
+                Bucket: aws.String(name),
+        }); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to delete bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">w.WriteHeader(http.StatusNoContent)</span>
+}
+
+// renameBucketHandler handles POST /buckets/{name}/rename.
+// S3 has no native rename, so we: create new → copy all objects → delete old.
+// Returns 409 if the new name is already taken.
+func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldName string) <span class="cov5" title="3">{
+        if oldName == "" </span><span class="cov0" title="0">{
+                jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov5" title="3">var body struct {
+                NewName string `json:"new_name"`
+        }
+        if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, "invalid JSON body", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov5" title="3">if strings.TrimSpace(body.NewName) == "" </span><span class="cov1" title="1">{
+                jsonError(w, "new_name must not be empty", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov3" title="2">if oldName == body.NewName </span><span class="cov0" title="0">{
+                jsonError(w, "new_name must differ from current name", http.StatusBadRequest)
+                return
+        }</span>
+
+        // Check old bucket exists
+        <span class="cov3" title="2">oldExists, err := a.bucketExists(r, oldName)
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to check source bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+        <span class="cov3" title="2">if !oldExists </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("bucket %q not found", oldName), http.StatusNotFound)
+                return
+        }</span>
+
+        // Check new name is not already taken (duplicate guard)
+        <span class="cov3" title="2">newExists, err := a.bucketExists(r, body.NewName)
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to check destination bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+        <span class="cov3" title="2">if newExists </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("bucket %q already exists", body.NewName), http.StatusConflict)
+                return
+        }</span>
+
+        // Create new bucket
+        <span class="cov1" title="1">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
+                Bucket: aws.String(body.NewName),
+        }); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to create destination bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        // Copy all objects from old to new bucket
+        <span class="cov1" title="1">listOut, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+                Bucket: aws.String(oldName),
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to list objects for copy: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">for _, obj := range listOut.Contents </span><span class="cov1" title="1">{
+                key := aws.ToString(obj.Key)
+                if _, err := a.S3Client.CopyObject(r.Context(), &amp;s3.CopyObjectInput{
+                        Bucket:     aws.String(body.NewName),
+                        CopySource: aws.String(fmt.Sprintf("%s/%s", oldName, key)),
+                        Key:        aws.String(key),
+                }); err != nil </span><span class="cov0" title="0">{
+                        jsonError(w, fmt.Sprintf("failed to copy object %q: %v", key, err), http.StatusInternalServerError)
+                        return
+                }</span>
+        }
+
+        // Delete objects from old bucket then delete the bucket itself
+        <span class="cov1" title="1">if len(listOut.Contents) &gt; 0 </span><span class="cov1" title="1">{
+                objectIds := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
+                for _, obj := range listOut.Contents </span><span class="cov1" title="1">{
+                        objectIds = append(objectIds, types.ObjectIdentifier{Key: obj.Key})
+                }</span>
+                <span class="cov1" title="1">if _, err := a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
+                        Bucket: aws.String(oldName),
+                        Delete: &amp;types.Delete{Objects: objectIds},
+                }); err != nil </span><span class="cov0" title="0">{
+                        jsonError(w, fmt.Sprintf("failed to delete old objects: %v", err), http.StatusInternalServerError)
+                        return
+                }</span>
+        }
+
+        <span class="cov1" title="1">if _, err := a.S3Client.DeleteBucket(r.Context(), &amp;s3.DeleteBucketInput{
+                Bucket: aws.String(oldName),
+        }); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to delete old bucket: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(struct {
+                Name      string    `json:"name"`
+                CreatedAt time.Time `json:"created_at"`
+        }{Name: body.NewName, CreatedAt: time.Now().UTC()})</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package uploader
+
+import "net/http"
+
+// CORS adds cross-origin headers to every response and handles OPTIONS preflight
+// by returning 204 No Content immediately — without forwarding to the actual handler.
+// Browsers send an OPTIONS preflight before POST/PATCH/DELETE when custom headers
+// (e.g. Tus-Resumable) are present; failing to respond with 2xx blocks the real request.
+func CORS(next http.Handler) http.Handler <span class="cov10" title="4">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov10" title="4">{
+                w.Header().Set("Access-Control-Allow-Origin", "*")
+                w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD")
+                w.Header().Set("Access-Control-Allow-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Content-Type, Upload-Defer-Length, Upload-Concat, Location, X-HTTP-Method-Override")
+                w.Header().Set("Access-Control-Expose-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Location")
+                w.Header().Set("Access-Control-Max-Age", "86400")
+
+                // Respond to preflight immediately — do not forward to handlers.
+                if r.Method == http.MethodOptions </span><span class="cov5" title="2">{
+                        w.WriteHeader(http.StatusNoContent)
+                        return
+                }</span>
+
+                <span class="cov5" title="2">next.ServeHTTP(w, r)</span>
+        })
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package uploader
+
+import (
+        "context"
+        "encoding/base64"
+        "encoding/json"
+        "errors"
+        "fmt"
+        "io"
+        "net/http"
+        "os"
+        "strconv"
+        "strings"
+        "sync"
+        "time"
+
+        "github.com/aws/aws-sdk-go-v2/aws"
+        "github.com/aws/aws-sdk-go-v2/config"
+        "github.com/aws/aws-sdk-go-v2/credentials"
+        "github.com/aws/aws-sdk-go-v2/service/s3"
+        "github.com/aws/aws-sdk-go-v2/service/s3/types"
+        "github.com/tus/tusd/v2/pkg/handler"
+        "github.com/tus/tusd/v2/pkg/s3store"
+)
+
+// S3API defines the interface we need from the AWS S3 SDK.
+type S3API interface {
+        s3store.S3API
+        ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+        GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+        // Bucket management
+        ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
+        CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+        DeleteBucket(ctx context.Context, params *s3.DeleteBucketInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketOutput, error)
+        HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+        CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
+}
+
+// App holds the dependencies for the uploader service.
+type App struct {
+        TusHandler  http.Handler
+        S3Client    S3API
+        BucketName  string
+        S3Endpoint  string
+        tusHandlers sync.Map // map[string]http.Handler — per-user-bucket TUS handlers
+}
+
+// NewAppFromEnv initializes the App using environment variables.
+func NewAppFromEnv() (*App, error) <span class="cov0" title="0">{
+        accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
+        secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+        s3Endpoint := os.Getenv("S3_ENDPOINT")
+        region := os.Getenv("AWS_REGION")
+        bucketName := os.Getenv("S3_BUCKET")
+
+        // 1. Configure AWS SDK v2
+        customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) </span><span class="cov0" title="0">{
+                if s3Endpoint != "" </span><span class="cov0" title="0">{
+                        return aws.Endpoint{
+                                PartitionID:   "aws",
+                                URL:           s3Endpoint,
+                                SigningRegion: region,
+                        }, nil
+                }</span>
+                <span class="cov0" title="0">return aws.Endpoint{}, &amp;aws.EndpointNotFoundError{}</span>
+        })
+
+        <span class="cov0" title="0">cfg, err := config.LoadDefaultConfig(context.TODO(),
+                config.WithRegion(region),
+                config.WithEndpointResolverWithOptions(customResolver),
+                config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("unable to load SDK config: %w", err)
+        }</span>
+
+        // 2. Create S3 Client
+        <span class="cov0" title="0">s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) </span><span class="cov0" title="0">{
+                o.UsePathStyle = true
+        }</span>)
+
+        <span class="cov0" title="0">tusHandler, err := NewTusHandler(bucketName, s3Client)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">return &amp;App{
+                TusHandler: tusHandler,
+                S3Client:   s3Client,
+                BucketName: bucketName,
+                S3Endpoint: s3Endpoint,
+        }, nil</span>
+}
+
+// NewTusHandler creates a Tus handler pointed at the root bucket (legacy/fallback).
+func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, error) <span class="cov10" title="5">{
+        store := s3store.New(bucketName, s3Client)
+
+        composer := handler.NewStoreComposer()
+        store.UseIn(composer)
+
+        tusHandler, err := handler.NewHandler(handler.Config{
+                BasePath:                "/files/",
+                StoreComposer:           composer,
+                NotifyCompleteUploads:   false,
+                RespectForwardedHeaders: true,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("unable to create tus handler: %w", err)
+        }</span>
+
+        <span class="cov10" title="5">return http.StripPrefix("/files/", tusHandler), nil</span>
+}
+
+// NewTusHandlerForBucket creates a Tus handler with a user-bucket-specific BasePath.
+// The returned handler expects paths like /files/&lt;bucket&gt;/&lt;upload-id&gt;.
+func NewTusHandlerForBucket(bucketName string, s3Client s3store.S3API) (http.Handler, error) <span class="cov0" title="0">{
+        store := s3store.New(bucketName, s3Client)
+
+        composer := handler.NewStoreComposer()
+        store.UseIn(composer)
+
+        basePath := "/files/" + bucketName + "/"
+        tusHandler, err := handler.NewHandler(handler.Config{
+                BasePath:                basePath,
+                StoreComposer:           composer,
+                NotifyCompleteUploads:   false,
+                RespectForwardedHeaders: true,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("unable to create tus handler for bucket %q: %w", bucketName, err)
+        }</span>
+
+        <span class="cov0" title="0">return http.StripPrefix(basePath, tusHandler), nil</span>
+}
+
+// GetTusHandlerForBucket returns a cached per-bucket TUS handler, creating it if needed.
+func (a *App) GetTusHandlerForBucket(bucket string) (http.Handler, error) <span class="cov0" title="0">{
+        if h, ok := a.tusHandlers.Load(bucket); ok </span><span class="cov0" title="0">{
+                return h.(http.Handler), nil
+        }</span>
+
+        <span class="cov0" title="0">h, err := NewTusHandlerForBucket(bucket, a.S3Client)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">actual, _ := a.tusHandlers.LoadOrStore(bucket, h)
+        return actual.(http.Handler), nil</span>
+}
+
+// ExtractBucketFromTUSMetadata parses the Upload-Metadata header and returns the
+// base64-decoded value for the "bucket" key. Returns "" if not found or invalid.
+func ExtractBucketFromTUSMetadata(header string) string <span class="cov8" title="4">{
+        for _, part := range strings.Split(header, ",") </span><span class="cov10" title="5">{
+                part = strings.TrimSpace(part)
+                kv := strings.SplitN(part, " ", 2)
+                if len(kv) == 2 &amp;&amp; kv[0] == "bucket" </span><span class="cov4" title="2">{
+                        decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(kv[1]))
+                        if err == nil </span><span class="cov4" title="2">{
+                                return string(decoded)
+                        }</span>
+                }
+        }
+        <span class="cov4" title="2">return ""</span>
+}
+
+// FilesHandler is the main dispatcher for all /files/ routes.
+//
+//        GET  /files/                    → ListFilesHandler (requires ?bucket=)
+//        GET  /files/&lt;bucket&gt;/&lt;key&gt;      → DownloadFileHandler
+//        DELETE /files/&lt;bucket&gt;/&lt;key&gt;    → DeleteFileHandler
+//        POST /files/ (TUS)              → routes to per-bucket TUS handler
+//        PATCH/HEAD /files/&lt;bucket&gt;/&lt;id&gt; → routes to per-bucket TUS handler
+func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) <span class="cov0" title="0">{
+        isTUS := r.Header.Get("Tus-Resumable") != ""
+        path := r.URL.Path
+
+        // ── Non-TUS: GET /files/ → list files ──────────────────────────────────
+        if r.Method == http.MethodGet &amp;&amp; path == "/files/" &amp;&amp; !isTUS </span><span class="cov0" title="0">{
+                a.ListFilesHandler(w, r)
+                return
+        }</span>
+
+        // Parse path segments after /files/
+        <span class="cov0" title="0">rest := strings.TrimPrefix(path, "/files/")
+        parts := strings.SplitN(rest, "/", 2)
+        hasTwoParts := len(parts) == 2 &amp;&amp; parts[0] != "" &amp;&amp; parts[1] != ""
+
+        // ── Non-TUS: /files/&lt;bucket&gt;/&lt;key&gt; ─────────────────────────────────────
+        if !isTUS &amp;&amp; hasTwoParts </span><span class="cov0" title="0">{
+                bucket, key := parts[0], parts[1]
+                switch r.Method </span>{
+                case http.MethodGet:<span class="cov0" title="0">
+                        a.DownloadFileHandler(w, r, bucket, key)
+                        return</span>
+                case http.MethodDelete:<span class="cov0" title="0">
+                        a.DeleteFileHandler(w, r, bucket, key)
+                        return</span>
+                default:<span class="cov0" title="0">
+                        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+                        return</span>
+                }
+        }
+
+        // ── TUS: POST /files/ → create upload in user bucket ───────────────────
+        <span class="cov0" title="0">if isTUS &amp;&amp; r.Method == http.MethodPost &amp;&amp; path == "/files/" </span><span class="cov0" title="0">{
+                bucket := ExtractBucketFromTUSMetadata(r.Header.Get("Upload-Metadata"))
+                if bucket == "" </span><span class="cov0" title="0">{
+                        jsonError(w, "Upload-Metadata must include bucket field", http.StatusBadRequest)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">h, err := a.GetTusHandlerForBucket(bucket)
+                if err != nil </span><span class="cov0" title="0">{
+                        jsonError(w, "failed to initialize upload handler", http.StatusInternalServerError)
+                        return
+                }</span>
+
+                // Rewrite path so the per-bucket handler receives /files/&lt;bucket&gt;/
+                <span class="cov0" title="0">r.URL.Path = "/files/" + bucket + "/"
+                h.ServeHTTP(w, r)
+                return</span>
+        }
+
+        // ── TUS: PATCH / HEAD / OPTIONS on /files/&lt;bucket&gt;/&lt;upload-id&gt; ─────────
+        <span class="cov0" title="0">if isTUS &amp;&amp; hasTwoParts </span><span class="cov0" title="0">{
+                bucket := parts[0]
+                h, err := a.GetTusHandlerForBucket(bucket)
+                if err != nil </span><span class="cov0" title="0">{
+                        jsonError(w, "failed to initialize upload handler", http.StatusInternalServerError)
+                        return
+                }</span>
+                <span class="cov0" title="0">h.ServeHTTP(w, r)
+                return</span>
+        }
+
+        // Fallback: pass to root TUS handler (OPTIONS discovery, etc.)
+        <span class="cov0" title="0">a.TusHandler.ServeHTTP(w, r)</span>
+}
+
+// ListFilesHandler returns a JSON list of files in the specified user bucket.
+// Requires ?bucket=&lt;name&gt; query parameter.
+func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) <span class="cov7" title="3">{
+        bucket := r.URL.Query().Get("bucket")
+        if bucket == "" </span><span class="cov1" title="1">{
+                jsonError(w, "bucket query parameter is required", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov4" title="2">output, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+                Bucket: aws.String(bucket),
+        })
+        if err != nil </span><span class="cov1" title="1">{
+                if isBucketNotFound(err) </span><span class="cov1" title="1">{
+                        jsonError(w, fmt.Sprintf("bucket %q not found", bucket), http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov0" title="0">jsonError(w, fmt.Sprintf("failed to list objects: %v", err), http.StatusInternalServerError)
+                return</span>
+        }
+
+        <span class="cov1" title="1">type FileInfo struct {
+                Key          string    `json:"key"`
+                Name         string    `json:"name"`
+                Size         int64     `json:"size"`
+                LastModified time.Time `json:"lastModified"`
+                URL          string    `json:"url"`
+        }
+
+        files := make([]FileInfo, 0)
+        for _, obj := range output.Contents </span><span class="cov4" title="2">{
+                key := aws.ToString(obj.Key)
+                // Skip .info sidecar files and empty keys
+                if key == "" || strings.HasSuffix(key, ".info") </span><span class="cov1" title="1">{
+                        continue</span>
+                }
+
+                // Try to read original filename from TUS .info sidecar
+                <span class="cov1" title="1">name := key
+                infoObj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
+                        Bucket: aws.String(bucket),
+                        Key:    aws.String(key + ".info"),
+                })
+                if err == nil </span><span class="cov1" title="1">{
+                        var info struct {
+                                MetaData map[string]string `json:"MetaData"`
+                        }
+                        if jsonErr := json.NewDecoder(infoObj.Body).Decode(&amp;info); jsonErr == nil </span><span class="cov1" title="1">{
+                                if filename, ok := info.MetaData["filename"]; ok &amp;&amp; filename != "" </span><span class="cov1" title="1">{
+                                        name = filename
+                                }</span>
+                        }
+                        <span class="cov1" title="1">infoObj.Body.Close()</span>
+                }
+
+                <span class="cov1" title="1">var lastModified time.Time
+                if obj.LastModified != nil </span><span class="cov0" title="0">{
+                        lastModified = *obj.LastModified
+                }</span>
+
+                // Backend proxy URL — frontend calls this to download
+                <span class="cov1" title="1">downloadURL := fmt.Sprintf("/files/%s/%s", bucket, key)
+
+                files = append(files, FileInfo{
+                        Key:          key,
+                        Name:         name,
+                        Size:         aws.ToInt64(obj.Size),
+                        LastModified: lastModified,
+                        URL:          downloadURL,
+                })</span>
+        }
+
+        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        if err := json.NewEncoder(w).Encode(files); err != nil </span><span class="cov0" title="0">{
+                http.Error(w, "failed to encode response", http.StatusInternalServerError)
+        }</span>
+}
+
+// DownloadFileHandler streams a file from the user bucket to the client.
+// GET /files/&lt;bucket&gt;/&lt;key&gt;
+func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov4" title="2">{
+        // Retrieve original filename from TUS .info sidecar (best-effort)
+        filename := key
+        infoObj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(key + ".info"),
+        })
+        if err == nil </span><span class="cov1" title="1">{
+                var info struct {
+                        MetaData map[string]string `json:"MetaData"`
+                }
+                if jsonErr := json.NewDecoder(infoObj.Body).Decode(&amp;info); jsonErr == nil </span><span class="cov1" title="1">{
+                        if fn, ok := info.MetaData["filename"]; ok &amp;&amp; fn != "" </span><span class="cov1" title="1">{
+                                filename = fn
+                        }</span>
+                }
+                <span class="cov1" title="1">infoObj.Body.Close()</span>
+        }
+
+        // Get the actual file object
+        <span class="cov4" title="2">obj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(key),
+        })
+        if err != nil </span><span class="cov1" title="1">{
+                if isObjectNotFound(err) </span><span class="cov1" title="1">{
+                        jsonError(w, "file not found", http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov0" title="0">jsonError(w, fmt.Sprintf("failed to retrieve file: %v", err), http.StatusInternalServerError)
+                return</span>
+        }
+        <span class="cov1" title="1">defer obj.Body.Close()
+
+        // Set response headers
+        contentType := "application/octet-stream"
+        if obj.ContentType != nil &amp;&amp; *obj.ContentType != "" </span><span class="cov1" title="1">{
+                contentType = *obj.ContentType
+        }</span>
+        <span class="cov1" title="1">w.Header().Set("Content-Type", contentType)
+        w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeFilename(filename)))
+        if obj.ContentLength != nil &amp;&amp; *obj.ContentLength &gt; 0 </span><span class="cov1" title="1">{
+                w.Header().Set("Content-Length", strconv.FormatInt(*obj.ContentLength, 10))
+        }</span>
+
+        <span class="cov1" title="1">w.WriteHeader(http.StatusOK)
+        io.Copy(w, obj.Body)</span> //nolint:errcheck — client disconnect is expected
+}
+
+// DeleteFileHandler deletes a file and its TUS .info sidecar from the user bucket.
+// DELETE /files/&lt;bucket&gt;/&lt;key&gt;
+func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov4" title="2">{
+        // Verify the file exists before attempting deletion
+        _, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(key),
+        })
+        if err != nil </span><span class="cov1" title="1">{
+                if isObjectNotFound(err) </span><span class="cov1" title="1">{
+                        jsonError(w, "file not found", http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov0" title="0">jsonError(w, fmt.Sprintf("failed to check file: %v", err), http.StatusInternalServerError)
+                return</span>
+        }
+
+        // Batch-delete: file + .info sidecar
+        <span class="cov1" title="1">_, err = a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
+                Bucket: aws.String(bucket),
+                Delete: &amp;types.Delete{
+                        Objects: []types.ObjectIdentifier{
+                                {Key: aws.String(key)},
+                                {Key: aws.String(key + ".info")},
+                        },
+                },
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to delete file: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">w.WriteHeader(http.StatusNoContent)</span>
+}
+
+// isObjectNotFound returns true when an S3 error indicates a missing key.
+func isObjectNotFound(err error) bool <span class="cov4" title="2">{
+        var nsk *types.NoSuchKey
+        var notFound *types.NotFound
+        return errors.As(err, &amp;nsk) || errors.As(err, &amp;notFound)
+}</span>
+
+// sanitizeFilename removes characters that could break Content-Disposition headers.
+func sanitizeFilename(name string) string <span class="cov1" title="1">{
+        replacer := strings.NewReplacer(`"`, `\"`, "\n", "", "\r", "")
+        return replacer.Replace(name)
+}</span>
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
