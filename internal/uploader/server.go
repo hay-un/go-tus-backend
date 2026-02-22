@@ -187,15 +187,19 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(rest, "/", 2)
 	hasTwoParts := len(parts) == 2 && parts[0] != "" && parts[1] != ""
 
-	// ── Non-TUS: /files/<bucket>/<key> ─────────────────────────────────────
+	// ── Non-TUS: /files/<bucket>/<key> or /files/<bucket>/<key>/stream ─────
 	if !isTUS && hasTwoParts {
-		bucket, key := parts[0], parts[1]
+		bucket, rawKey := parts[0], parts[1]
 		switch r.Method {
 		case http.MethodGet:
-			a.DownloadFileHandler(w, r, bucket, key)
+			if key, isStream := strings.CutSuffix(rawKey, "/stream"); isStream {
+				a.StreamFileHandler(w, r, bucket, key)
+				return
+			}
+			a.DownloadFileHandler(w, r, bucket, rawKey)
 			return
 		case http.MethodDelete:
-			a.DeleteFileHandler(w, r, bucket, key)
+			a.DeleteFileHandler(w, r, bucket, rawKey)
 			return
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -266,6 +270,7 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 		Size         int64     `json:"size"`
 		LastModified time.Time `json:"lastModified"`
 		URL          string    `json:"url"`
+		StreamURL    string    `json:"streamUrl"`
 	}
 
 	files := make([]FileInfo, 0)
@@ -299,8 +304,9 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 			lastModified = *obj.LastModified
 		}
 
-		// Backend proxy URL — frontend calls this to download
+		// Backend proxy URLs — frontend calls these to download or stream.
 		downloadURL := fmt.Sprintf("/files/%s/%s", bucket, key)
+		streamURL := fmt.Sprintf("/files/%s/%s/stream", bucket, key)
 
 		files = append(files, FileInfo{
 			Key:          key,
@@ -308,6 +314,7 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 			Size:         aws.ToInt64(obj.Size),
 			LastModified: lastModified,
 			URL:          downloadURL,
+			StreamURL:    streamURL,
 		})
 	}
 
