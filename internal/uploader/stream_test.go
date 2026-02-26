@@ -1,6 +1,7 @@
 package uploader
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -20,7 +21,7 @@ import (
 func TestStreamFileHandler_ShouldReturn200WithFullBody_WhenNoRangeHeader(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	fileContent := "fake video bytes"
 	totalSize := int64(len(fileContent))
@@ -59,7 +60,7 @@ func TestStreamFileHandler_ShouldReturn200WithFullBody_WhenNoRangeHeader(t *test
 func TestStreamFileHandler_ShouldReturn206WithPartialBody_WhenRangeHeaderPresent(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	fullContent := "0123456789abcdefghijklmnopqrstuvwxyz" // 36 bytes
 	partialContent := fullContent[0:10]                   // bytes 0-9
@@ -99,7 +100,7 @@ func TestStreamFileHandler_ShouldReturn206WithPartialBody_WhenRangeHeaderPresent
 func TestStreamFileHandler_ShouldReturn206WithSuffixRange_WhenRangeIsNegative(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	partialContent := "6789" // last 4 bytes of "0123456789"
 
@@ -132,7 +133,7 @@ func TestStreamFileHandler_ShouldReturn206WithSuffixRange_WhenRangeIsNegative(t 
 func TestStreamFileHandler_ShouldReturn416_WhenRangeExceedsFileSize(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.HeadObjectOutput{
@@ -157,7 +158,7 @@ func TestStreamFileHandler_ShouldReturn416_WhenRangeExceedsFileSize(t *testing.T
 func TestStreamFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(in *s3.HeadObjectInput) bool {
 		return aws.ToString(in.Key) == "ghost"
@@ -179,7 +180,7 @@ func TestStreamFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 func TestStreamFileHandler_ShouldReturn500_WhenHeadObjectFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, errors.New("s3: connection refused"))
@@ -199,7 +200,7 @@ func TestStreamFileHandler_ShouldReturn500_WhenHeadObjectFails(t *testing.T) {
 func TestStreamFileHandler_ShouldReturn500_WhenGetObjectFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.HeadObjectOutput{
@@ -225,7 +226,7 @@ func TestStreamFileHandler_ShouldReturn500_WhenGetObjectFails(t *testing.T) {
 func TestStreamFileHandler_ShouldReturn404_WhenGetObjectNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.HeadObjectOutput{
@@ -251,7 +252,7 @@ func TestStreamFileHandler_ShouldReturn404_WhenGetObjectNotFound(t *testing.T) {
 func TestStreamFileHandler_ShouldUseOctetStream_WhenContentTypeNotSetInS3(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.HeadObjectOutput{
@@ -431,4 +432,26 @@ func TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid(t *testing.T) {
 			assert.Error(t, err, "expected parseByteRange to fail for header %q", tt.header)
 		})
 	}
+}
+
+// ── Access control ────────────────────────────────────────────────────────────
+
+func TestStreamFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", Audit: &NoopAuditProducer{}}
+
+	req, _ := http.NewRequest(http.MethodGet, "/files/forbidden-bucket/key/stream", nil)
+	// User is only allowed "my-bucket", not "forbidden-bucket"
+	claims := &Claims{AllowedBuckets: []string{"my-bucket"}, Role: "user"}
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey, claims))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.StreamFileHandler(rr, req, "forbidden-bucket", "key")
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "access denied")
+	mockS3.AssertNotCalled(t, "HeadObject")
 }

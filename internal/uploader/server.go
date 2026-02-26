@@ -42,7 +42,8 @@ type App struct {
 	S3Client    S3API
 	BucketName  string
 	S3Endpoint  string
-	tusHandlers sync.Map // map[string]http.Handler — per-user-bucket TUS handlers
+	Audit       AuditProducer            // never nil; use NoopAuditProducer in tests
+	tusHandlers sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
 }
 
 // NewAppFromEnv initializes the App using environment variables.
@@ -89,6 +90,7 @@ func NewAppFromEnv() (*App, error) {
 		S3Client:   s3Client,
 		BucketName: bucketName,
 		S3Endpoint: s3Endpoint,
+		Audit:      &NoopAuditProducer{},
 	}, nil
 }
 
@@ -215,6 +217,14 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if claims, ok := ClaimsFromContext(r.Context()); ok {
+			if !claims.CanAccessBucket(bucket) {
+				emitAudit(a, r, "file.access_denied", "/files/"+bucket, http.StatusForbidden)
+				jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+				return
+			}
+		}
+
 		h, err := a.GetTusHandlerForBucket(bucket)
 		if err != nil {
 			jsonError(w, "failed to initialize upload handler", http.StatusInternalServerError)
@@ -223,6 +233,8 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Rewrite path so the per-bucket handler receives /files/<bucket>/
 		r.URL.Path = "/files/" + bucket + "/"
+		// Emit audit after handing off (fire-and-forget; TUS upload is initiated)
+		emitAudit(a, r, "file.upload", "/files/"+bucket, http.StatusCreated)
 		h.ServeHTTP(w, r)
 		return
 	}
@@ -250,6 +262,14 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 	if bucket == "" {
 		jsonError(w, "bucket query parameter is required", http.StatusBadRequest)
 		return
+	}
+
+	if claims, ok := ClaimsFromContext(r.Context()); ok {
+		if !claims.CanAccessBucket(bucket) {
+			emitAudit(a, r, "file.access_denied", "/files/?bucket="+bucket, http.StatusForbidden)
+			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+			return
+		}
 	}
 
 	output, err := a.S3Client.ListObjectsV2(r.Context(), &s3.ListObjectsV2Input{
@@ -321,12 +341,22 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(files); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
 	}
+	emitAudit(a, r, "file.list", "/files/?bucket="+bucket, http.StatusOK)
 }
 
 // DownloadFileHandler streams a file from the user bucket to the client.
 // GET /files/<bucket>/<key>
 func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok {
+		if !claims.CanAccessBucket(bucket) {
+			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key, http.StatusForbidden)
+			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+			return
+		}
+	}
+
 	// Retrieve original filename from TUS .info sidecar (best-effort)
 	filename := key
 	infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
@@ -373,11 +403,20 @@ func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket
 
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, obj.Body) //nolint:errcheck — client disconnect is expected
+	emitAudit(a, r, "file.download", "/files/"+bucket+"/"+key, http.StatusOK)
 }
 
 // DeleteFileHandler deletes a file and its TUS .info sidecar from the user bucket.
 // DELETE /files/<bucket>/<key>
 func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok {
+		if !claims.CanAccessBucket(bucket) {
+			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key, http.StatusForbidden)
+			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+			return
+		}
+	}
+
 	// Verify the file exists before attempting deletion
 	_, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
@@ -408,6 +447,7 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	emitAudit(a, r, "file.delete", "/files/"+bucket+"/"+key, http.StatusNoContent)
 }
 
 // isObjectNotFound returns true when an S3 error indicates a missing key.

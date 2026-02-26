@@ -1,6 +1,7 @@
 package uploader
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,20 @@ func newTestApp(mockS3 *MockS3Client) *App {
 		S3Client:   mockS3,
 		BucketName: "default-bucket",
 		S3Endpoint: "http://localhost:9000",
+		Audit:      &NoopAuditProducer{},
 	}
+}
+
+// withAdminClaims injects admin Claims into the request context.
+func withAdminClaims(r *http.Request) *http.Request {
+	claims := &Claims{Subject: "admin-uuid", Email: "admin@test.com", AllowedBuckets: []string{"*"}, Role: "admin"}
+	return r.WithContext(context.WithValue(r.Context(), claimsKey, claims))
+}
+
+// withUserClaims injects restricted user Claims into the request context.
+func withUserClaims(r *http.Request, allowedBuckets []string) *http.Request {
+	claims := &Claims{Subject: "user-uuid", Email: "user@test.com", AllowedBuckets: allowedBuckets, Role: "user"}
+	return r.WithContext(context.WithValue(r.Context(), claimsKey, claims))
 }
 
 // ── ListBuckets ──────────────────────────────────────────────────────────────
@@ -287,5 +301,95 @@ func TestRenameBucketHandler_ShouldReturn400_WhenNewNameIsEmpty(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	mockS3.AssertNotCalled(t, "CreateBucket")
+}
+
+// ── Access control ────────────────────────────────────────────────────────────
+
+func TestListBucketsHandler_ShouldFilterBuckets_WhenAllowedBucketsRestricted(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	created := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockS3.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("allowed-bucket"), CreationDate: &created},
+				{Name: aws.String("other-bucket"), CreationDate: &created},
+			},
+		}, nil)
+
+	req, _ := http.NewRequest(http.MethodGet, "/buckets", nil)
+	req = withUserClaims(req, []string{"allowed-bucket"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var buckets []map[string]interface{}
+	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&buckets))
+	assert.Len(t, buckets, 1, "only the allowed bucket should appear")
+	assert.Equal(t, "allowed-bucket", buckets[0]["name"])
+	mockS3.AssertExpectations(t)
+}
+
+func TestCreateBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	body := `{"name":"new-bucket"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	req = withUserClaims(req, []string{"*"}) // AllowedBuckets=*, but Role=user
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "admin role required")
+	mockS3.AssertNotCalled(t, "CreateBucket")
+}
+
+func TestDeleteBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/buckets/my-bucket", nil)
+	req.URL.Path = "/buckets/my-bucket"
+	req = withUserClaims(req, []string{"*"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketItemHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "admin role required")
+	mockS3.AssertNotCalled(t, "DeleteBucket")
+}
+
+func TestRenameBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	body := `{"new_name":"new-name"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets/old-name/rename", strings.NewReader(body))
+	req.URL.Path = "/buckets/old-name/rename"
+	req = withUserClaims(req, []string{"*"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketItemHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "admin role required")
 	mockS3.AssertNotCalled(t, "CreateBucket")
 }

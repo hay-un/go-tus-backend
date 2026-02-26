@@ -16,6 +16,11 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// injectClaims is a test helper that injects Claims into the request context.
+func injectClaims(r *http.Request, c *Claims) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), claimsKey, c))
+}
+
 // MockS3Client satisfies the S3API interface for unit tests.
 // All methods delegate to testify/mock for expectation tracking.
 type MockS3Client struct {
@@ -231,7 +236,7 @@ func TestTusHandler_ShouldReturn500_WhenS3IsUnavailable(t *testing.T) {
 func TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	req, _ := http.NewRequest("GET", "/files/", nil)
 	rr := httptest.NewRecorder()
@@ -248,7 +253,7 @@ func TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing(t *testing.T)
 func TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(input *s3.ListObjectsV2Input) bool {
 		return aws.ToString(input.Bucket) == "my-videos"
@@ -283,7 +288,7 @@ func TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists(t *t
 func TestListFilesHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, &types.NoSuchBucket{})
@@ -304,7 +309,7 @@ func TestListFilesHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
 func TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	fileContent := "hello world"
 
@@ -339,7 +344,7 @@ func TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists(t *
 func TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
 		return aws.ToString(input.Key) == "ghost.info"
@@ -366,7 +371,7 @@ func TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 func TestDeleteFileHandler_ShouldDeleteFileAndSidecar_WhenFileExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
 		return aws.ToString(input.Bucket) == "my-bucket" && aws.ToString(input.Key) == "abc123"
@@ -397,7 +402,7 @@ func TestDeleteFileHandler_ShouldDeleteFileAndSidecar_WhenFileExists(t *testing.
 func TestDeleteFileHandler_ShouldReturn404WithoutDeletion_WhenFileNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000"}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
 		return aws.ToString(input.Key) == "ghost"
@@ -455,4 +460,61 @@ func TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+// ── Access control ────────────────────────────────────────────────────────────
+
+func TestListFilesHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	req, _ := http.NewRequest("GET", "/files/?bucket=forbidden-bucket", nil)
+	// User is only allowed "my-bucket"
+	req = injectClaims(req, &Claims{AllowedBuckets: []string{"my-bucket"}, Role: "user"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ListFilesHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "access denied")
+	mockS3.AssertNotCalled(t, "ListObjectsV2")
+}
+
+func TestDownloadFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	req, _ := http.NewRequest("GET", "/files/forbidden-bucket/key", nil)
+	req = injectClaims(req, &Claims{AllowedBuckets: []string{"my-bucket"}, Role: "user"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DownloadFileHandler(rr, req, "forbidden-bucket", "key")
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "access denied")
+	mockS3.AssertNotCalled(t, "GetObject")
+}
+
+func TestDeleteFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	req, _ := http.NewRequest("DELETE", "/files/forbidden-bucket/key", nil)
+	req = injectClaims(req, &Claims{AllowedBuckets: []string{"my-bucket"}, Role: "user"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DeleteFileHandler(rr, req, "forbidden-bucket", "key")
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "access denied")
+	mockS3.AssertNotCalled(t, "HeadObject")
 }

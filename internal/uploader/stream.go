@@ -24,6 +24,14 @@ import (
 //   - Content-Disposition is "inline" so the browser renders the player
 //     instead of triggering a file download.
 func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok {
+		if !claims.CanAccessBucket(bucket) {
+			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key+"/stream", http.StatusForbidden)
+			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+			return
+		}
+	}
+
 	// Probe file metadata: total size + stored content-type.
 	head, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
@@ -56,6 +64,7 @@ func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 	if rangeHeader == "" {
 		// No Range header — serve complete file with 200 OK.
 		a.serveFullStream(w, r, bucket, key, totalSize)
+		emitAudit(a, r, "file.stream", "/files/"+bucket+"/"+key+"/stream", http.StatusOK)
 		return
 	}
 
@@ -92,6 +101,7 @@ func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 	w.Header().Set("Content-Length", strconv.FormatInt(chunkSize, 10))
 	w.WriteHeader(http.StatusPartialContent)
 	io.Copy(w, obj.Body) //nolint:errcheck — client disconnect is expected
+	emitAudit(a, r, "file.stream", "/files/"+bucket+"/"+key+"/stream", http.StatusPartialContent)
 }
 
 // serveFullStream fetches the complete object and writes it with 200 OK.

@@ -92,9 +92,16 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt time.Time `json:"created_at"`
 	}
 
+	claims, hasClaims := ClaimsFromContext(r.Context())
+
 	buckets := make([]BucketInfo, 0, len(output.Buckets))
 	for _, b := range output.Buckets {
-		info := BucketInfo{Name: aws.ToString(b.Name)}
+		name := aws.ToString(b.Name)
+		// Filter by allowedBuckets when claims are present and not wildcard admin.
+		if hasClaims && !claims.CanAccessBucket(name) {
+			continue
+		}
+		info := BucketInfo{Name: name}
 		if b.CreationDate != nil {
 			info.CreatedAt = *b.CreationDate
 		}
@@ -102,12 +109,19 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(buckets)
+	json.NewEncoder(w).Encode(buckets) //nolint:errcheck
+	emitAudit(a, r, "bucket.list", "/buckets", http.StatusOK)
 }
 
 // CreateBucketHandler handles POST /buckets.
 // Returns 409 if a bucket with the same name already exists.
+// Requires admin role.
 func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok && claims.Role != "admin" {
+		jsonError(w, "admin role required to create buckets", http.StatusForbidden)
+		return
+	}
+
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -140,15 +154,22 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(struct {
+	json.NewEncoder(w).Encode(struct { //nolint:errcheck
 		Name      string    `json:"name"`
 		CreatedAt time.Time `json:"created_at"`
 	}{Name: body.Name, CreatedAt: time.Now().UTC()})
+	emitAudit(a, r, "bucket.create", "/buckets/"+body.Name, http.StatusCreated)
 }
 
 // deleteBucketHandler handles DELETE /buckets/{name}.
 // It cascade-deletes all objects inside before removing the bucket.
+// Requires admin role.
 func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok && claims.Role != "admin" {
+		jsonError(w, "admin role required to delete buckets", http.StatusForbidden)
+		return
+	}
+
 	if name == "" {
 		jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
 		return
@@ -196,12 +217,19 @@ func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name s
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	emitAudit(a, r, "bucket.delete", "/buckets/"+name, http.StatusNoContent)
 }
 
 // renameBucketHandler handles POST /buckets/{name}/rename.
 // S3 has no native rename, so we: create new → copy all objects → delete old.
 // Returns 409 if the new name is already taken.
+// Requires admin role.
 func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldName string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok && claims.Role != "admin" {
+		jsonError(w, "admin role required to rename buckets", http.StatusForbidden)
+		return
+	}
+
 	if oldName == "" {
 		jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
 		return
@@ -297,8 +325,9 @@ func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldNam
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
+	json.NewEncoder(w).Encode(struct { //nolint:errcheck
 		Name      string    `json:"name"`
 		CreatedAt time.Time `json:"created_at"`
 	}{Name: body.NewName, CreatedAt: time.Now().UTC()})
+	emitAudit(a, r, "bucket.rename", "/buckets/"+oldName+"/rename", http.StatusOK)
 }

@@ -38,7 +38,7 @@ To tear down the local environment:
 make down
 ```
 
-## 🧪 Testing
+## 🧪 Testing f s
 
 The project has both **unit tests** (fast, no heavy dependencies) and **integration tests** (require real MinIO infrastructure).
 
