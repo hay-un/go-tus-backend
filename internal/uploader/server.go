@@ -38,12 +38,30 @@ type S3API interface {
 
 // App holds the dependencies for the uploader service.
 type App struct {
-	TusHandler  http.Handler
-	S3Client    S3API
-	BucketName  string
-	S3Endpoint  string
-	Audit       AuditProducer            // never nil; use NoopAuditProducer in tests
-	tusHandlers sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
+	TusHandler   http.Handler
+	S3Client     S3API
+	BucketName   string
+	S3Endpoint   string
+	Audit        AuditProducer            // never nil; use NoopAuditProducer in tests
+	Shares       *SharesClient            // nil when GO_SHARES_URL not configured
+	tusHandlers  sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
+}
+
+// canAccessBucket returns true if the given claims grant access to bucket.
+// It checks JWT allowedBuckets first; falls back to go-shares if configured.
+// Sharees are identified by their email address.
+func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string) bool {
+	if claims.CanAccessBucket(bucket) {
+		return true
+	}
+	if a.Shares == nil || claims.Email == "" {
+		return false
+	}
+	ok, err := a.Shares.CanAccess(ctx, bucket, claims.Email)
+	if err != nil {
+		return false // fail closed
+	}
+	return ok
 }
 
 // NewAppFromEnv initializes the App using environment variables.
@@ -218,7 +236,7 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if claims, ok := ClaimsFromContext(r.Context()); ok {
-			if !claims.CanAccessBucket(bucket) {
+			if !a.canAccessBucket(r.Context(), claims, bucket) {
 				emitAudit(a, r, "file.access_denied", "/files/"+bucket, http.StatusForbidden)
 				jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
 				return
@@ -265,7 +283,7 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if claims, ok := ClaimsFromContext(r.Context()); ok {
-		if !claims.CanAccessBucket(bucket) {
+		if !a.canAccessBucket(r.Context(), claims, bucket) {
 			emitAudit(a, r, "file.access_denied", "/files/?bucket="+bucket, http.StatusForbidden)
 			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
 			return
@@ -350,7 +368,7 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 // GET /files/<bucket>/<key>
 func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if claims, ok := ClaimsFromContext(r.Context()); ok {
-		if !claims.CanAccessBucket(bucket) {
+		if !a.canAccessBucket(r.Context(), claims, bucket) {
 			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key, http.StatusForbidden)
 			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
 			return
@@ -410,7 +428,7 @@ func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket
 // DELETE /files/<bucket>/<key>
 func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if claims, ok := ClaimsFromContext(r.Context()); ok {
-		if !claims.CanAccessBucket(bucket) {
+		if !a.canAccessBucket(r.Context(), claims, bucket) {
 			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key, http.StatusForbidden)
 			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
 			return

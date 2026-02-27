@@ -25,7 +25,7 @@ import (
 //     instead of triggering a file download.
 func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if claims, ok := ClaimsFromContext(r.Context()); ok {
-		if !claims.CanAccessBucket(bucket) {
+		if !a.canAccessBucket(r.Context(), claims, bucket) {
 			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key+"/stream", http.StatusForbidden)
 			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
 			return

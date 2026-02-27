@@ -33,6 +33,15 @@ func main() {
 	}
 	app.Audit = audit
 
+	// ── Shares client (go-shares) ─────────────────────────────────────────────
+	if sharesURL := os.Getenv("GO_SHARES_URL"); sharesURL != "" {
+		sharesSecret := os.Getenv("INTERNAL_API_SECRET")
+		app.Shares = uploader.NewSharesClient(sharesURL, sharesSecret)
+		log.Printf("go-shares client configured (url=%s)", sharesURL)
+	} else {
+		log.Println("GO_SHARES_URL not set — sharing feature disabled")
+	}
+
 	// ── JWT middleware ────────────────────────────────────────────────────────
 	issuer := os.Getenv("KEYCLOAK_ISSUER")
 	if issuer == "" {

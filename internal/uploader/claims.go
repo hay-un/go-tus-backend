@@ -35,3 +35,17 @@ func (c *Claims) CanAccessBucket(bucket string) bool {
 	}
 	return false
 }
+
+// OwnsBucket reports whether this user is the explicit owner of the bucket.
+// The bucket must appear in AllowedBuckets without wildcard, or the user must be an admin.
+func (c *Claims) OwnsBucket(bucket string) bool {
+	if c.Role == "admin" {
+		return true
+	}
+	for _, b := range c.AllowedBuckets {
+		if b != "*" && b == bucket {
+			return true
+		}
+	}
+	return false
+}

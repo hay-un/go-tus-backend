@@ -54,7 +54,8 @@ func (a *App) BucketsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// BucketItemHandler dispatches on /buckets/{name} and /buckets/{name}/rename.
+// BucketItemHandler dispatches on /buckets/{name}, /buckets/{name}/rename,
+// and /buckets/{name}/shares[/{sharee}].
 func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) {
 	// Strip the "/buckets/" prefix
 	rest := strings.TrimPrefix(r.URL.Path, "/buckets/")
@@ -69,6 +70,12 @@ func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /buckets/{name}/shares[/{sharee}]
+	if strings.Contains(rest, "/shares") {
+		a.SharesItemHandler(w, r)
+		return
+	}
+
 	// /buckets/{name}
 	name := strings.TrimSuffix(rest, "/")
 	switch r.Method {
@@ -80,6 +87,7 @@ func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListBucketsHandler handles GET /buckets.
+// Returns personal buckets (via JWT allowedBuckets) plus buckets shared with the user (via go-shares).
 func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	output, err := a.S3Client.ListBuckets(r.Context(), &s3.ListBucketsInput{})
 	if err != nil {
@@ -90,14 +98,25 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	type BucketInfo struct {
 		Name      string    `json:"name"`
 		CreatedAt time.Time `json:"created_at"`
+		Shared    bool      `json:"shared,omitempty"` // true when bucket belongs to another user
 	}
 
 	claims, hasClaims := ClaimsFromContext(r.Context())
 
-	buckets := make([]BucketInfo, 0, len(output.Buckets))
+	// Build MinIO bucket index for fast CreatedAt lookup.
+	minioBuckets := make(map[string]time.Time, len(output.Buckets))
 	for _, b := range output.Buckets {
 		name := aws.ToString(b.Name)
-		// Filter by allowedBuckets when claims are present and not wildcard admin.
+		if b.CreationDate != nil {
+			minioBuckets[name] = *b.CreationDate
+		}
+	}
+
+	buckets := make([]BucketInfo, 0)
+
+	// ── Personal buckets (JWT allowedBuckets) ────────────────────────────────
+	for _, b := range output.Buckets {
+		name := aws.ToString(b.Name)
 		if hasClaims && !claims.CanAccessBucket(name) {
 			continue
 		}
@@ -106,6 +125,26 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 			info.CreatedAt = *b.CreationDate
 		}
 		buckets = append(buckets, info)
+	}
+
+	// ── Shared buckets (go-shares) ────────────────────────────────────────────
+	if a.Shares != nil && hasClaims && claims.Email != "" {
+		sharedEntries, err := a.Shares.GetSharedBuckets(r.Context(), claims.Email)
+		if err == nil {
+			included := make(map[string]bool, len(buckets))
+			for _, b := range buckets {
+				included[b.Name] = true
+			}
+			for _, entry := range sharedEntries {
+				bucketName, _ := entry["ownerBucket"].(string)
+				if bucketName == "" || included[bucketName] {
+					continue
+				}
+				info := BucketInfo{Name: bucketName, Shared: true, CreatedAt: minioBuckets[bucketName]}
+				buckets = append(buckets, info)
+				included[bucketName] = true
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
