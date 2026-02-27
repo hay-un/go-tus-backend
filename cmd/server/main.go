@@ -58,6 +58,15 @@ func main() {
 	http.Handle("/buckets", wrap(http.HandlerFunc(app.BucketsHandler)))
 	http.Handle("/buckets/", wrap(http.HandlerFunc(app.BucketItemHandler)))
 
+	// ── Internal routes (server-to-server, shared secret auth) ───────────────
+	internalSecret := os.Getenv("INTERNAL_API_SECRET")
+	if internalSecret == "" {
+		log.Println("INTERNAL_API_SECRET not set — internal endpoints unprotected (dev mode)")
+	}
+	http.Handle("/internal/provision-user",
+		uploader.InternalSecretMiddleware(internalSecret,
+			http.HandlerFunc(app.ProvisionUserHandler)))
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
