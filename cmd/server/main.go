@@ -55,11 +55,13 @@ func main() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK")) //nolint:errcheck
+		w.Write([]byte("OK")) //nolint:errcheck
 	})
 
 	// ── Routes ────────────────────────────────────────────────────────────────
 	//   GET  /files/                    → list files (?bucket=required)
 	//   GET  /files/<bucket>/<key>      → download file (proxy)
+	//   GET  /files/<bucket>/<key>/stream → streaming (cookie auth for <video src>)
 	//   DELETE /files/<bucket>/<key>    → delete file
 	//   POST /files/ (TUS)              → create upload in user bucket
 	//   PATCH/HEAD /files/<bucket>/<id> → TUS upload continuation
