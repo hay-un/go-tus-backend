@@ -17,6 +17,18 @@ COPY . .
 # CGO_ENABLED=0 for static binary
 RUN CGO_ENABLED=0 GOOS=linux go build -o tus-server ./cmd/server
 
+# Dev Stage — live reload with go run
+FROM golang:1.23-alpine AS dev
+
+WORKDIR /app
+
+RUN apk add --no-cache git
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+CMD ["go", "run", "./cmd/server"]
+
 # Final Stage (Distroless-like with Alpine)
 FROM alpine:3.19
 
