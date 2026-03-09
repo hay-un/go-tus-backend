@@ -9,6 +9,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCORS_ShouldUseAllowedOriginEnvVar_WhenSet(t *testing.T) {
+	// Arrange
+	t.Setenv("ALLOWED_ORIGIN", "https://codirs.example.com")
+	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/buckets", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	handler.ServeHTTP(rr, req)
+
+	// Assert
+	assert.Equal(t, "https://codirs.example.com", rr.Header().Get("Access-Control-Allow-Origin"))
+}
+
 func TestCORS_ShouldSetCORSHeaders_WhenNormalRequestReceived(t *testing.T) {
 	// Arrange
 	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
