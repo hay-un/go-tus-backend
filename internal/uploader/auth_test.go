@@ -114,7 +114,7 @@ func nopHandler(called *bool) http.Handler {
 func TestJWTMiddleware_ShouldBypass_WhenIssuerEmpty(t *testing.T) {
 	// Arrange
 	called := false
-	h := uploader.NewJWTMiddleware("", nopHandler(&called))
+	h := uploader.NewJWTMiddleware("", "", nopHandler(&called))
 	w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil)
 
 	// Act
@@ -132,7 +132,7 @@ func TestJWTMiddleware_ShouldReturn401_WhenNoToken(t *testing.T) {
 	issuer, cleanup := startIssuerServer(t, key)
 	defer cleanup()
 
-	h := uploader.NewJWTMiddleware(issuer, nopHandler(&called))
+	h := uploader.NewJWTMiddleware(issuer, issuer+"/protocol/openid-connect/certs", nopHandler(&called))
 	w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil)
 
 	// Act
@@ -152,7 +152,7 @@ func TestJWTMiddleware_ShouldReturn401_WhenTokenExpired(t *testing.T) {
 
 	expired := makeToken(t, key, issuer, time.Now().Add(-time.Hour), nil)
 
-	h := uploader.NewJWTMiddleware(issuer, nopHandler(&called))
+	h := uploader.NewJWTMiddleware(issuer, issuer+"/protocol/openid-connect/certs", nopHandler(&called))
 	w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", "Bearer "+expired)
 
@@ -173,7 +173,7 @@ func TestJWTMiddleware_ShouldReturn401_WhenWrongIssuer(t *testing.T) {
 
 	wrongIssuer := makeToken(t, key, "http://wrong-issuer", time.Now().Add(time.Hour), nil)
 
-	h := uploader.NewJWTMiddleware(issuer, nopHandler(&called))
+	h := uploader.NewJWTMiddleware(issuer, issuer+"/protocol/openid-connect/certs", nopHandler(&called))
 	w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", "Bearer "+wrongIssuer)
 
@@ -194,7 +194,7 @@ func TestJWTMiddleware_ShouldPassThrough_WhenValidToken(t *testing.T) {
 
 	valid := makeToken(t, key, issuer, time.Now().Add(time.Hour), nil)
 
-	h := uploader.NewJWTMiddleware(issuer, nopHandler(&called))
+	h := uploader.NewJWTMiddleware(issuer, issuer+"/protocol/openid-connect/certs", nopHandler(&called))
 	w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", "Bearer "+valid)
 
@@ -215,7 +215,7 @@ func TestJWTMiddleware_ShouldAcceptQueryParamToken_ForStreamEndpoints(t *testing
 
 	valid := makeToken(t, key, issuer, time.Now().Add(time.Hour), nil)
 
-	h := uploader.NewJWTMiddleware(issuer, nopHandler(&called))
+	h := uploader.NewJWTMiddleware(issuer, issuer+"/protocol/openid-connect/certs", nopHandler(&called))
 	w := httptest.NewRecorder()
 	// No Authorization header — token passed as query param (for <video src>)
 	r := httptest.NewRequest(http.MethodGet, "/files/bucket/key/stream?token="+valid, nil)

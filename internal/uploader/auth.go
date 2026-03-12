@@ -28,7 +28,11 @@ type keycloakClaims struct {
 //
 // Dev-mode bypass: if issuer is empty the middleware is a no-op and injects
 // admin Claims so all handlers continue to work without Keycloak running.
-func NewJWTMiddleware(issuer string, next http.Handler) http.Handler {
+// NewJWTMiddleware returns an HTTP middleware that validates Keycloak RS256 JWTs.
+// issuer is the public-facing OIDC issuer URL used to validate the JWT "iss" claim.
+// jwksURL is the endpoint to fetch signing keys — use the internal Docker URL to avoid
+// HTTPS cert requirements inside containers (e.g. http://keycloak:8080/.../certs).
+func NewJWTMiddleware(issuer, jwksURL string, next http.Handler) http.Handler {
 	if issuer == "" {
 		// Dev-mode: bypass auth, inject wildcard claims so handlers work.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,8 +46,6 @@ func NewJWTMiddleware(issuer string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-
-	jwksURL := issuer + "/protocol/openid-connect/certs"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := extractToken(r)
