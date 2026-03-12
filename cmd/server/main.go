@@ -47,8 +47,15 @@ func main() {
 	if issuer == "" {
 		log.Println("KEYCLOAK_ISSUER not set — JWT validation bypassed (dev mode)")
 	}
+	// KEYCLOAK_INTERNAL_ISSUER: internal Docker URL for JWKS fetch (avoids custom CA in container).
+	// Falls back to KEYCLOAK_ISSUER if not set (e.g. prod with public CA cert).
+	internalIssuer := os.Getenv("KEYCLOAK_INTERNAL_ISSUER")
+	if internalIssuer == "" {
+		internalIssuer = issuer
+	}
+	jwksURL := internalIssuer + "/protocol/openid-connect/certs"
 	wrap := func(h http.Handler) http.Handler {
-		return uploader.CORS(uploader.NewJWTMiddleware(issuer, h))
+		return uploader.CORS(uploader.NewJWTMiddleware(issuer, jwksURL, h))
 	}
 
 	// ── Health check (no auth required) ──────────────────────────────────────
