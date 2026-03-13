@@ -1,7 +1,9 @@
 package uploader
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+// MockKeycloakGranter is a testify mock for KeycloakGranter.
+type MockKeycloakGranter struct {
+	mock.Mock
+}
+
+func (m *MockKeycloakGranter) GrantBucket(ctx context.Context, email, bucket string) error {
+	args := m.Called(ctx, email, bucket)
+	return args.Error(0)
+}
 
 // ── sanitizeUsername ──────────────────────────────────────────────────────────
 
@@ -238,4 +250,78 @@ func TestProvisionUserHandler_ShouldReturn405_WhenMethodIsNotPost(t *testing.T) 
 
 	// Assert
 	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestProvisionUserHandler_ShouldCallGranter_WhenEmailProvided(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	mockGranter := new(MockKeycloakGranter)
+	app := newTestApp(mockS3)
+	app.KeycloakGranter = mockGranter
+
+	mockS3.On("HeadBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, &types.NoSuchBucket{})
+	mockS3.On("CreateBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.CreateBucketOutput{}, nil)
+	mockGranter.On("GrantBucket", mock.Anything, "bambang@test.com", "bambang-files").
+		Return(nil)
+
+	body := `{"username":"bambang","email":"bambang@test.com"}`
+	req, _ := http.NewRequest(http.MethodPost, "/internal/provision-user", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ProvisionUserHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	mockGranter.AssertExpectations(t)
+}
+
+func TestProvisionUserHandler_ShouldReturn500_WhenGranterFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	mockGranter := new(MockKeycloakGranter)
+	app := newTestApp(mockS3)
+	app.KeycloakGranter = mockGranter
+
+	mockS3.On("HeadBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, &types.NoSuchBucket{})
+	mockS3.On("CreateBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.CreateBucketOutput{}, nil)
+	mockGranter.On("GrantBucket", mock.Anything, "bambang@test.com", "bambang-files").
+		Return(fmt.Errorf("keycloak unavailable"))
+
+	body := `{"username":"bambang","email":"bambang@test.com"}`
+	req, _ := http.NewRequest(http.MethodPost, "/internal/provision-user", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ProvisionUserHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Contains(t, rr.Body.String(), "failed to grant bucket access")
+}
+
+func TestProvisionUserHandler_ShouldSkipGranter_WhenEmailIsEmpty(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	mockGranter := new(MockKeycloakGranter)
+	app := newTestApp(mockS3)
+	app.KeycloakGranter = mockGranter
+
+	mockS3.On("HeadBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadBucketOutput{}, nil)
+
+	body := `{"username":"bambang"}` // no email field
+	req, _ := http.NewRequest(http.MethodPost, "/internal/provision-user", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ProvisionUserHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusOK, rr.Code)
+	mockGranter.AssertNotCalled(t, "GrantBucket")
 }

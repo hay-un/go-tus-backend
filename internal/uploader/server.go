@@ -38,13 +38,14 @@ type S3API interface {
 
 // App holds the dependencies for the uploader service.
 type App struct {
-	TusHandler   http.Handler
-	S3Client     S3API
-	BucketName   string
-	S3Endpoint   string
-	Audit        AuditProducer            // never nil; use NoopAuditProducer in tests
-	Shares       *SharesClient            // nil when GO_SHARES_URL not configured
-	tusHandlers  sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
+	TusHandler      http.Handler
+	S3Client        S3API
+	BucketName      string
+	S3Endpoint      string
+	Audit           AuditProducer            // never nil; use NoopAuditProducer in tests
+	Shares          *SharesClient            // nil when GO_SHARES_URL not configured
+	KeycloakGranter KeycloakGranter          // nil when admin credentials not configured
+	tusHandlers     sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
 }
 
 // canAccessBucket returns true if the given claims grant access to bucket.

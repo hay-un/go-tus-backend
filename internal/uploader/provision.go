@@ -40,7 +40,8 @@ type provisionResponse struct {
 }
 
 // ProvisionUserHandler handles POST /internal/provision-user.
-// Creates the user's personal bucket ({username}-files) if it does not already exist.
+// Creates the user's personal bucket ({username}-files) if it does not already exist,
+// then grants access by setting the allowed_buckets Keycloak attribute (when configured).
 // Idempotent: returns 200 if the bucket already exists, 201 if newly created.
 func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -50,6 +51,7 @@ func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		Username string `json:"username"`
+		Email    string `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid JSON body", http.StatusBadRequest)
@@ -70,21 +72,33 @@ func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	status := "exists"
+	if !exists {
+		if _, err := a.S3Client.CreateBucket(r.Context(), &s3.CreateBucketInput{
+			Bucket: aws.String(bucketName),
+		}); err != nil {
+			jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
+			return
+		}
+		status = "created"
+	}
+
+	// Grant Keycloak access regardless of whether bucket was just created or already existed,
+	// so that access is always consistent with bucket state.
+	if a.KeycloakGranter != nil && body.Email != "" {
+		if err := a.KeycloakGranter.GrantBucket(r.Context(), body.Email, bucketName); err != nil {
+			jsonError(w, fmt.Sprintf("failed to grant bucket access: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if exists {
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "exists"}) //nolint:errcheck
+	if status == "created" {
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "created"}) //nolint:errcheck
+		emitAudit(a, r, "bucket.provision", "/internal/provision-user/"+bucketName, http.StatusCreated)
 		return
 	}
-
-	if _, err := a.S3Client.CreateBucket(r.Context(), &s3.CreateBucketInput{
-		Bucket: aws.String(bucketName),
-	}); err != nil {
-		jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "created"}) //nolint:errcheck
-	emitAudit(a, r, "bucket.provision", "/internal/provision-user/"+bucketName, http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "exists"}) //nolint:errcheck
 }
