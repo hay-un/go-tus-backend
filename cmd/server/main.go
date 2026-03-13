@@ -33,6 +33,19 @@ func main() {
 	}
 	app.Audit = audit
 
+	// ── Keycloak granter (sets allowed_buckets attribute after provisioning) ──
+	keycloakGranter := uploader.NewHTTPKeycloakGranter(
+		os.Getenv("KEYCLOAK_INTERNAL_ISSUER"),
+		os.Getenv("KEYCLOAK_ADMIN_USERNAME"),
+		os.Getenv("KEYCLOAK_ADMIN_PASSWORD"),
+	)
+	if keycloakGranter != nil {
+		app.KeycloakGranter = keycloakGranter
+		log.Println("Keycloak granter configured — bucket provisioning will set allowed_buckets")
+	} else {
+		log.Println("Keycloak admin credentials not set — bucket provisioning skips Keycloak attribute update")
+	}
+
 	// ── Shares client (go-shares) ─────────────────────────────────────────────
 	if sharesURL := os.Getenv("GO_SHARES_URL"); sharesURL != "" {
 		sharesSecret := os.Getenv("INTERNAL_API_SECRET")
