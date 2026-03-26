@@ -153,21 +153,42 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateBucketHandler handles POST /buckets.
+// Top-level bucket creation requires admin role.
+// Sub-bucket creation (parent field provided) requires the caller to own the parent bucket.
+// Sub-buckets are stored as MinIO buckets named "{parent}--{name}".
 // Returns 409 if a bucket with the same name already exists.
-// Requires admin role.
 func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
-	if claims, ok := ClaimsFromContext(r.Context()); ok && claims.Role != "admin" {
-		jsonError(w, "admin role required to create buckets", http.StatusForbidden)
-		return
-	}
-
 	var body struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Parent string `json:"parent"` // optional; when set, creates a sub-bucket inside parent
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+
+	claims, hasClaims := ClaimsFromContext(r.Context())
+
+	if body.Parent != "" {
+		// Sub-bucket: caller must own the parent bucket
+		if !hasClaims {
+			jsonError(w, "authentication required to create sub-buckets", http.StatusUnauthorized)
+			return
+		}
+		if !claims.OwnsBucket(body.Parent) {
+			jsonError(w, "you do not own the parent bucket", http.StatusForbidden)
+			return
+		}
+		// Full MinIO bucket name: "{parent}--{child}"
+		body.Name = body.Parent + "--" + body.Name
+	} else {
+		// Top-level bucket: requires admin role
+		if hasClaims && claims.Role != "admin" {
+			jsonError(w, "admin role required to create buckets", http.StatusForbidden)
+			return
+		}
+	}
+
 	if strings.TrimSpace(body.Name) == "" {
 		jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
 		return
@@ -191,6 +212,11 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Grant the new sub-bucket in Keycloak so it appears in the user's JWT on next token refresh.
+	if body.Parent != "" && a.KeycloakGranter != nil && hasClaims && claims.Email != "" {
+		_ = a.KeycloakGranter.GrantBucket(r.Context(), claims.Email, body.Name)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(struct { //nolint:errcheck
@@ -202,10 +228,10 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 // deleteBucketHandler handles DELETE /buckets/{name}.
 // It cascade-deletes all objects inside before removing the bucket.
-// Requires admin role.
+// Requires the caller to own the bucket (explicit allowedBuckets entry or admin role).
 func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name string) {
-	if claims, ok := ClaimsFromContext(r.Context()); ok && claims.Role != "admin" {
-		jsonError(w, "admin role required to delete buckets", http.StatusForbidden)
+	if claims, ok := ClaimsFromContext(r.Context()); ok && !claims.OwnsBucket(name) {
+		jsonError(w, "you do not own this bucket", http.StatusForbidden)
 		return
 	}
 
@@ -262,10 +288,10 @@ func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name s
 // renameBucketHandler handles POST /buckets/{name}/rename.
 // S3 has no native rename, so we: create new → copy all objects → delete old.
 // Returns 409 if the new name is already taken.
-// Requires admin role.
+// Requires the caller to own the bucket (explicit allowedBuckets entry or admin role).
 func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldName string) {
-	if claims, ok := ClaimsFromContext(r.Context()); ok && claims.Role != "admin" {
-		jsonError(w, "admin role required to rename buckets", http.StatusForbidden)
+	if claims, ok := ClaimsFromContext(r.Context()); ok && !claims.OwnsBucket(oldName) {
+		jsonError(w, "you do not own this bucket", http.StatusForbidden)
 		return
 	}
 

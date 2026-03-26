@@ -355,14 +355,14 @@ func TestCreateBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
 	mockS3.AssertNotCalled(t, "CreateBucket")
 }
 
-func TestDeleteBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
+func TestDeleteBucketHandler_ShouldReturn403_WhenUserDoesNotOwnBucket(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
 	app := newTestApp(mockS3)
 
 	req, _ := http.NewRequest(http.MethodDelete, "/buckets/my-bucket", nil)
 	req.URL.Path = "/buckets/my-bucket"
-	req = withUserClaims(req, []string{"*"})
+	req = withUserClaims(req, []string{"other-bucket"}) // does not own "my-bucket"
 	rr := httptest.NewRecorder()
 
 	// Act
@@ -370,11 +370,41 @@ func TestDeleteBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, http.StatusForbidden, rr.Code)
-	assert.Contains(t, rr.Body.String(), "admin role required")
+	assert.Contains(t, rr.Body.String(), "you do not own this bucket")
 	mockS3.AssertNotCalled(t, "DeleteBucket")
 }
 
-func TestRenameBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
+func TestDeleteBucketHandler_ShouldReturn204_WhenUserOwnsBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "my-bucket"
+	}), mock.Anything).Return(&s3.HeadBucketOutput{}, nil)
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(in *s3.ListObjectsV2Input) bool {
+		return aws.ToString(in.Bucket) == "my-bucket"
+	}), mock.Anything).Return(&s3.ListObjectsV2Output{Contents: nil}, nil)
+
+	mockS3.On("DeleteBucket", mock.Anything, mock.MatchedBy(func(in *s3.DeleteBucketInput) bool {
+		return aws.ToString(in.Bucket) == "my-bucket"
+	}), mock.Anything).Return(&s3.DeleteBucketOutput{}, nil)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/buckets/my-bucket", nil)
+	req.URL.Path = "/buckets/my-bucket"
+	req = withUserClaims(req, []string{"my-bucket"}) // owns "my-bucket"
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketItemHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestRenameBucketHandler_ShouldReturn403_WhenUserDoesNotOwnBucket(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
 	app := newTestApp(mockS3)
@@ -382,7 +412,7 @@ func TestRenameBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
 	body := `{"new_name":"new-name"}`
 	req, _ := http.NewRequest(http.MethodPost, "/buckets/old-name/rename", strings.NewReader(body))
 	req.URL.Path = "/buckets/old-name/rename"
-	req = withUserClaims(req, []string{"*"})
+	req = withUserClaims(req, []string{"other-bucket"}) // does not own "old-name"
 	rr := httptest.NewRecorder()
 
 	// Act
@@ -390,6 +420,115 @@ func TestRenameBucketHandler_ShouldReturn403_WhenNonAdmin(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, http.StatusForbidden, rr.Code)
-	assert.Contains(t, rr.Body.String(), "admin role required")
+	assert.Contains(t, rr.Body.String(), "you do not own this bucket")
+	mockS3.AssertNotCalled(t, "CreateBucket")
+}
+
+func TestRenameBucketHandler_ShouldReturn200_WhenUserOwnsBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "my-bucket"
+	}), mock.Anything).Return(&s3.HeadBucketOutput{}, nil)
+
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "new-name"
+	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+
+	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
+		return aws.ToString(in.Bucket) == "new-name"
+	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListObjectsV2Output{Contents: nil}, nil)
+
+	mockS3.On("DeleteBucket", mock.Anything, mock.MatchedBy(func(in *s3.DeleteBucketInput) bool {
+		return aws.ToString(in.Bucket) == "my-bucket"
+	}), mock.Anything).Return(&s3.DeleteBucketOutput{}, nil)
+
+	body := `{"new_name":"new-name"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets/my-bucket/rename", strings.NewReader(body))
+	req.URL.Path = "/buckets/my-bucket/rename"
+	req = withUserClaims(req, []string{"my-bucket"}) // owns "my-bucket"
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketItemHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "new-name")
+	mockS3.AssertExpectations(t)
+}
+
+// ── Sub-bucket creation ───────────────────────────────────────────────────────
+
+func TestCreateBucketHandler_ShouldReturn201WithFullName_WhenUserOwnsParentBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "john-files--work"
+	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+
+	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
+		return aws.ToString(in.Bucket) == "john-files--work"
+	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+
+	body := `{"name":"work","parent":"john-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	req = withUserClaims(req, []string{"john-files"}) // owns "john-files"
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	var resp map[string]interface{}
+	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Equal(t, "john-files--work", resp["name"], "response name must be the full MinIO bucket name")
+	assert.NotEmpty(t, resp["created_at"])
+	mockS3.AssertExpectations(t)
+}
+
+func TestCreateBucketHandler_ShouldReturn403_WhenUserDoesNotOwnParentBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	body := `{"name":"work","parent":"alice-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	req = withUserClaims(req, []string{"john-files"}) // owns john-files, NOT alice-files
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "you do not own the parent bucket")
+	mockS3.AssertNotCalled(t, "CreateBucket")
+}
+
+func TestCreateBucketHandler_ShouldReturn401_WhenNoAuthAndParentProvided(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	body := `{"name":"work","parent":"john-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	// no claims injected — simulates missing/invalid JWT
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "authentication required")
 	mockS3.AssertNotCalled(t, "CreateBucket")
 }
