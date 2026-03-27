@@ -281,6 +281,15 @@ func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
+	// Best-effort: cascade-delete all shares for this bucket.
+	// Failure is logged but does not block the response — bucket is already gone.
+	if a.Shares != nil {
+		if err := a.Shares.DeleteSharesForBucket(r.Context(), name); err != nil {
+			// Non-fatal: stale shares will be invisible (bucket is gone) and cleaned on next query.
+			_ = err
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 	emitAudit(a, r, "bucket.delete", "/buckets/"+name, http.StatusNoContent)
 }

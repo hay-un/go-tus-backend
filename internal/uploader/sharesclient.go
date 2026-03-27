@@ -218,5 +218,30 @@ func (s *SharesClient) GetSharedBuckets(ctx context.Context, shareeID string) ([
 	return body.Data, nil
 }
 
+// DeleteSharesForBucket calls go-shares to cascade-delete all shares for a bucket.
+// Called when a bucket is deleted to prevent stale shares from reappearing on recreation.
+func (s *SharesClient) DeleteSharesForBucket(ctx context.Context, bucket string) error {
+	endpoint := fmt.Sprintf("%s/internal/shares/bucket/%s", s.baseURL, url.PathEscape(bucket))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	s.InvalidateCache(bucket)
+	return nil
+}
+
 // jsonReader returns a strings.Reader for an inline JSON string.
 func jsonReader(s string) *strings.Reader { return strings.NewReader(s) }
