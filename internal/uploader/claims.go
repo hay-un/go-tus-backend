@@ -1,6 +1,9 @@
 package uploader
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
@@ -24,6 +27,7 @@ func ClaimsFromContext(ctx context.Context) (*Claims, bool) {
 
 // CanAccessBucket reports whether the claims grant access to the named bucket.
 // Admin claims (AllowedBuckets == ["*"]) grant access to every bucket.
+// Owning a parent bucket (e.g. "foo") also grants access to its sub-buckets ("foo--bar").
 func (c *Claims) CanAccessBucket(bucket string) bool {
 	for _, b := range c.AllowedBuckets {
 		if b == "*" {
@@ -32,18 +36,28 @@ func (c *Claims) CanAccessBucket(bucket string) bool {
 		if b == bucket {
 			return true
 		}
+		if strings.HasPrefix(bucket, b+"--") {
+			return true
+		}
 	}
 	return false
 }
 
 // OwnsBucket reports whether this user is the explicit owner of the bucket.
 // The bucket must appear in AllowedBuckets without wildcard, or the user must be an admin.
+// Owning a parent bucket also implies ownership of its sub-buckets.
 func (c *Claims) OwnsBucket(bucket string) bool {
 	if c.Role == "admin" {
 		return true
 	}
 	for _, b := range c.AllowedBuckets {
-		if b != "*" && b == bucket {
+		if b == "*" {
+			continue
+		}
+		if b == bucket {
+			return true
+		}
+		if strings.HasPrefix(bucket, b+"--") {
 			return true
 		}
 	}

@@ -532,3 +532,106 @@ func TestCreateBucketHandler_ShouldReturn401_WhenNoAuthAndParentProvided(t *test
 	assert.Contains(t, rr.Body.String(), "authentication required")
 	mockS3.AssertNotCalled(t, "CreateBucket")
 }
+
+// TestListBucketsHandler_ShouldIncludeSubBucket_WhenUserOwnsParentBucket guards the
+// regression where "parent--child" disappeared from the list after logout/login.
+// Owning "john-files" must implicitly grant access to "john-files--level-1" via the
+// HasPrefix check in CanAccessBucket — no explicit grant in the JWT is required.
+func TestListBucketsHandler_ShouldIncludeSubBucket_WhenUserOwnsParentBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	created := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockS3.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("john-files"), CreationDate: &created},
+				{Name: aws.String("john-files--level-1"), CreationDate: &created},
+				{Name: aws.String("alice-files"), CreationDate: &created},
+			},
+		}, nil)
+
+	req, _ := http.NewRequest(http.MethodGet, "/buckets", nil)
+	// JWT only has the parent bucket — sub-bucket is NOT explicitly listed
+	req = withUserClaims(req, []string{"john-files"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var buckets []map[string]interface{}
+	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&buckets))
+
+	names := make([]string, 0, len(buckets))
+	for _, b := range buckets {
+		names = append(names, b["name"].(string))
+	}
+	assert.Contains(t, names, "john-files", "parent bucket must be present")
+	assert.Contains(t, names, "john-files--level-1", "sub-bucket must be visible via parent ownership")
+	assert.NotContains(t, names, "alice-files", "other user's bucket must be filtered out")
+	mockS3.AssertExpectations(t)
+}
+
+func TestCreateBucketHandler_ShouldCallGrantBucket_WhenCreatingSubBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+	mockGranter := new(MockKeycloakGranter)
+	app.KeycloakGranter = mockGranter
+
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "john-files--level-1"
+	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+
+	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
+		return aws.ToString(in.Bucket) == "john-files--level-1"
+	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+
+	mockGranter.On("GrantBucket", mock.Anything, "user@test.com", "john-files--level-1").
+		Return(nil)
+
+	body := `{"name":"level-1","parent":"john-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	req = withUserClaims(req, []string{"john-files"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	mockS3.AssertExpectations(t)
+	mockGranter.AssertExpectations(t)
+}
+
+func TestCreateBucketHandler_ShouldNotCallGrantBucket_WhenCreatingTopLevelBucket(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+	mockGranter := new(MockKeycloakGranter)
+	app.KeycloakGranter = mockGranter
+
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "new-top-level"
+	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+
+	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
+		return aws.ToString(in.Bucket) == "new-top-level"
+	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+
+	body := `{"name":"new-top-level"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	req = withAdminClaims(req) // top-level creation requires admin
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	mockGranter.AssertNotCalled(t, "GrantBucket")
+	mockS3.AssertExpectations(t)
+}
