@@ -40,6 +40,7 @@ type S3API interface {
 type App struct {
 	TusHandler      http.Handler
 	S3Client        S3API
+	Presigner       Presigner                // nil when S3 client not yet initialized
 	BucketName      string
 	S3Endpoint      string
 	Audit           AuditProducer            // never nil; use NoopAuditProducer in tests
@@ -107,6 +108,7 @@ func NewAppFromEnv() (*App, error) {
 	return &App{
 		TusHandler: tusHandler,
 		S3Client:   s3Client,
+		Presigner:  s3.NewPresignClient(s3Client),
 		BucketName: bucketName,
 		S3Endpoint: s3Endpoint,
 		Audit:      &NoopAuditProducer{},
@@ -200,6 +202,12 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 	// ── Non-TUS: GET /files/ → list files ──────────────────────────────────
 	if r.Method == http.MethodGet && path == "/files/" && !isTUS {
 		a.ListFilesHandler(w, r)
+		return
+	}
+
+	// ── Non-TUS: GET /files/share → generate presigned URL ─────────────────
+	if r.Method == http.MethodGet && path == "/files/share" && !isTUS {
+		a.ShareFileHandler(w, r)
 		return
 	}
 
