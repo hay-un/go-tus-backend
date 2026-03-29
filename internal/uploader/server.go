@@ -34,25 +34,33 @@ type S3API interface {
 	DeleteBucket(ctx context.Context, params *s3.DeleteBucketInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketOutput, error)
 	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
 	CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, params *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
 }
 
 // App holds the dependencies for the uploader service.
 type App struct {
-	TusHandler      http.Handler
-	S3Client        S3API
-	Presigner       Presigner                // nil when S3 client not yet initialized
-	BucketName      string
-	S3Endpoint      string
-	Audit           AuditProducer            // never nil; use NoopAuditProducer in tests
-	Shares          *SharesClient            // nil when GO_SHARES_URL not configured
-	KeycloakGranter KeycloakGranter          // nil when admin credentials not configured
-	tusHandlers     sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
+	TusHandler         http.Handler
+	S3Client           S3API
+	Presigner          Presigner       // nil when S3 client not yet initialized
+	BucketName         string
+	S3Endpoint         string
+	Audit              AuditProducer   // never nil; use NoopAuditProducer in tests
+	Shares             *SharesClient   // nil when GO_SHARES_URL not configured
+	KeycloakGranter    KeycloakGranter // nil when admin credentials not configured
+	TrashRetentionDays int             // 0 = no lifecycle rule set on bucket creation
+	tusHandlers        sync.Map        // map[string]http.Handler — per-user-bucket TUS handlers
 }
 
 // canAccessBucket returns true if the given claims grant access to bucket.
-// It checks JWT allowedBuckets first; falls back to go-shares if configured.
-// Sharees are identified by their email address.
+// Checks bucket trash status first (deleted bucket = zero access for everyone).
+// Then checks JWT allowedBuckets, then falls back to go-shares share access.
 func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string) bool {
+	// Bucket in trash = zero access for owner and all sharees
+	if a.Shares != nil {
+		if deleted, err := a.Shares.IsBucketDeleted(ctx, bucket); err == nil && deleted {
+			return false
+		}
+	}
 	if claims.CanAccessBucket(bucket) {
 		return true
 	}
@@ -105,13 +113,21 @@ func NewAppFromEnv() (*App, error) {
 		return nil, err
 	}
 
+	trashRetentionDays := 30
+	if v := os.Getenv("TRASH_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			trashRetentionDays = n
+		}
+	}
+
 	return &App{
-		TusHandler: tusHandler,
-		S3Client:   s3Client,
-		Presigner:  s3.NewPresignClient(s3Client),
-		BucketName: bucketName,
-		S3Endpoint: s3Endpoint,
-		Audit:      &NoopAuditProducer{},
+		TusHandler:         tusHandler,
+		S3Client:           s3Client,
+		Presigner:          s3.NewPresignClient(s3Client),
+		BucketName:         bucketName,
+		S3Endpoint:         s3Endpoint,
+		Audit:              &NoopAuditProducer{},
+		TrashRetentionDays: trashRetentionDays,
 	}, nil
 }
 
@@ -221,11 +237,24 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 		bucket, rawKey := parts[0], parts[1]
 		switch r.Method {
 		case http.MethodGet:
+			if rawKey == "trash" {
+				a.ListFileTrashHandler(w, r, bucket)
+				return
+			}
 			if key, isStream := strings.CutSuffix(rawKey, "/stream"); isStream {
 				a.StreamFileHandler(w, r, bucket, key)
 				return
 			}
 			a.DownloadFileHandler(w, r, bucket, rawKey)
+			return
+		case http.MethodPost:
+			if after, ok := strings.CutPrefix(rawKey, "trash/"); ok {
+				if key, ok := strings.CutSuffix(after, "/restore"); ok {
+					a.RestoreFileHandler(w, r, bucket, key)
+					return
+				}
+			}
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		case http.MethodDelete:
 			a.DeleteFileHandler(w, r, bucket, rawKey)
@@ -323,8 +352,8 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 	files := make([]FileInfo, 0)
 	for _, obj := range output.Contents {
 		key := aws.ToString(obj.Key)
-		// Skip .info sidecar files and empty keys
-		if key == "" || strings.HasSuffix(key, ".info") {
+		// Skip .info sidecar files, empty keys, and files in trash
+		if key == "" || strings.HasSuffix(key, ".info") || strings.HasPrefix(key, "__trash__/") {
 			continue
 		}
 
@@ -458,8 +487,24 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 		return
 	}
 
-	// Batch-delete: file + .info sidecar
-	_, err = a.S3Client.DeleteObjects(r.Context(), &s3.DeleteObjectsInput{
+	// Soft delete: move file to __trash__/ prefix
+	trashKey := "__trash__/" + key
+	if _, err = a.S3Client.CopyObject(r.Context(), &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		CopySource: aws.String(bucket + "/" + key),
+		Key:        aws.String(trashKey),
+	}); err != nil {
+		jsonError(w, fmt.Sprintf("failed to move file to trash: %v", err), http.StatusInternalServerError)
+		return
+	}
+	// Best-effort: copy .info sidecar to trash
+	a.S3Client.CopyObject(r.Context(), &s3.CopyObjectInput{ //nolint:errcheck
+		Bucket:     aws.String(bucket),
+		CopySource: aws.String(bucket + "/" + key + ".info"),
+		Key:        aws.String(trashKey + ".info"),
+	})
+	// Delete originals
+	if _, err = a.S3Client.DeleteObjects(r.Context(), &s3.DeleteObjectsInput{
 		Bucket: aws.String(bucket),
 		Delete: &types.Delete{
 			Objects: []types.ObjectIdentifier{
@@ -467,14 +512,155 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 				{Key: aws.String(key + ".info")},
 			},
 		},
-	})
-	if err != nil {
-		jsonError(w, fmt.Sprintf("failed to delete file: %v", err), http.StatusInternalServerError)
+	}); err != nil {
+		jsonError(w, fmt.Sprintf("failed to remove original file: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
 	emitAudit(a, r, "file.delete", "/files/"+bucket+"/"+key, http.StatusNoContent)
+}
+
+// ListFileTrashHandler lists files in the __trash__/ prefix of a user bucket.
+// GET /files/<bucket>/trash
+func (a *App) ListFileTrashHandler(w http.ResponseWriter, r *http.Request, bucket string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok {
+		if !a.canAccessBucket(r.Context(), claims, bucket) {
+			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/trash", http.StatusForbidden)
+			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+			return
+		}
+	}
+
+	output, err := a.S3Client.ListObjectsV2(r.Context(), &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String("__trash__/"),
+	})
+	if err != nil {
+		if isBucketNotFound(err) {
+			jsonError(w, fmt.Sprintf("bucket %q not found", bucket), http.StatusNotFound)
+			return
+		}
+		jsonError(w, fmt.Sprintf("failed to list trash: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	type TrashFileInfo struct {
+		Key       string    `json:"key"`
+		Name      string    `json:"name"`
+		Size      int64     `json:"size"`
+		DeletedAt time.Time `json:"deletedAt"`
+	}
+
+	files := make([]TrashFileInfo, 0)
+	for _, obj := range output.Contents {
+		trashKey := aws.ToString(obj.Key)
+		if trashKey == "" || strings.HasSuffix(trashKey, ".info") {
+			continue
+		}
+		originalKey := strings.TrimPrefix(trashKey, "__trash__/")
+
+		name := originalKey
+		infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(trashKey + ".info"),
+		})
+		if err == nil {
+			var info struct {
+				MetaData map[string]string `json:"MetaData"`
+			}
+			if jsonErr := json.NewDecoder(infoObj.Body).Decode(&info); jsonErr == nil {
+				if filename, ok := info.MetaData["filename"]; ok && filename != "" {
+					name = filename
+				}
+			}
+			infoObj.Body.Close()
+		}
+
+		var deletedAt time.Time
+		if obj.LastModified != nil {
+			deletedAt = *obj.LastModified
+		}
+
+		files = append(files, TrashFileInfo{
+			Key:       originalKey,
+			Name:      name,
+			Size:      aws.ToInt64(obj.Size),
+			DeletedAt: deletedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": files}) //nolint:errcheck
+	emitAudit(a, r, "file.trash.list", "/files/"+bucket+"/trash", http.StatusOK)
+}
+
+// RestoreFileHandler moves a file from __trash__/ back to its original location.
+// POST /files/<bucket>/trash/<key>/restore
+func (a *App) RestoreFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if claims, ok := ClaimsFromContext(r.Context()); ok {
+		if !a.canAccessBucket(r.Context(), claims, bucket) {
+			emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/trash/"+key+"/restore", http.StatusForbidden)
+			jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+			return
+		}
+	}
+
+	trashKey := "__trash__/" + key
+
+	// Verify file is in trash
+	if _, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(trashKey),
+	}); err != nil {
+		if isObjectNotFound(err) {
+			jsonError(w, "file not found in trash", http.StatusNotFound)
+			return
+		}
+		jsonError(w, fmt.Sprintf("failed to check file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Check no conflict at original location
+	if _, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}); err == nil {
+		jsonError(w, "a file with the same name already exists", http.StatusConflict)
+		return
+	} else if !isObjectNotFound(err) {
+		jsonError(w, fmt.Sprintf("failed to check original location: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Copy back to original location
+	if _, err := a.S3Client.CopyObject(r.Context(), &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		CopySource: aws.String(bucket + "/" + trashKey),
+		Key:        aws.String(key),
+	}); err != nil {
+		jsonError(w, fmt.Sprintf("failed to restore file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	// Best-effort: restore .info sidecar
+	a.S3Client.CopyObject(r.Context(), &s3.CopyObjectInput{ //nolint:errcheck
+		Bucket:     aws.String(bucket),
+		CopySource: aws.String(bucket + "/" + trashKey + ".info"),
+		Key:        aws.String(key + ".info"),
+	})
+	// Delete trash copies
+	a.S3Client.DeleteObjects(r.Context(), &s3.DeleteObjectsInput{ //nolint:errcheck
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{
+			Objects: []types.ObjectIdentifier{
+				{Key: aws.String(trashKey)},
+				{Key: aws.String(trashKey + ".info")},
+			},
+		},
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+	emitAudit(a, r, "file.restore", "/files/"+bucket+"/trash/"+key+"/restore", http.StatusNoContent)
 }
 
 // isObjectNotFound returns true when an S3 error indicates a missing key.

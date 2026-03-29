@@ -1,6 +1,7 @@
 package uploader
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,10 +56,20 @@ func (a *App) BucketsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // BucketItemHandler dispatches on /buckets/{name}, /buckets/{name}/rename,
-// and /buckets/{name}/shares[/{sharee}].
+// /buckets/{name}/restore, /buckets/trash, and /buckets/{name}/shares[/{sharee}].
 func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) {
 	// Strip the "/buckets/" prefix
 	rest := strings.TrimPrefix(r.URL.Path, "/buckets/")
+
+	// GET /buckets/trash → list trashed buckets
+	if rest == "trash" || rest == "trash/" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		a.ListBucketTrashHandler(w, r)
+		return
+	}
 
 	if strings.HasSuffix(rest, "/rename") {
 		name := strings.TrimSuffix(rest, "/rename")
@@ -67,6 +78,17 @@ func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.renameBucketHandler(w, r, name)
+		return
+	}
+
+	// POST /buckets/{name}/restore
+	if strings.HasSuffix(rest, "/restore") {
+		name := strings.TrimSuffix(rest, "/restore")
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		a.RestoreBucketHandler(w, r, name)
 		return
 	}
 
@@ -112,6 +134,19 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Build set of trashed bucket names to exclude from listing.
+	trashedSet := make(map[string]bool)
+	if a.Shares != nil && hasClaims && claims.Subject != "" {
+		trashed, err := a.Shares.GetTrashedBuckets(r.Context(), claims.Subject)
+		if err == nil {
+			for _, t := range trashed {
+				if bn, ok := t["bucketName"].(string); ok {
+					trashedSet[bn] = true
+				}
+			}
+		}
+	}
+
 	buckets := make([]BucketInfo, 0)
 
 	// ── Personal buckets (JWT allowedBuckets) ────────────────────────────────
@@ -119,6 +154,9 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) {
 		name := aws.ToString(b.Name)
 		if hasClaims && !claims.CanAccessBucket(name) {
 			continue
+		}
+		if trashedSet[name] {
+			continue // bucket is in trash — exclude from listing
 		}
 		info := BucketInfo{Name: name}
 		if b.CreationDate != nil {
@@ -212,6 +250,11 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Set MinIO lifecycle rule for __trash__/ prefix auto-expiry.
+	if a.TrashRetentionDays > 0 {
+		a.setTrashLifecycleRule(r.Context(), body.Name)
+	}
+
 	// Grant the new sub-bucket in Keycloak so it appears in the user's JWT on next token refresh.
 	if body.Parent != "" && a.KeycloakGranter != nil && hasClaims && claims.Email != "" {
 		_ = a.KeycloakGranter.GrantBucket(r.Context(), claims.Email, body.Name)
@@ -227,10 +270,12 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteBucketHandler handles DELETE /buckets/{name}.
-// It cascade-deletes all objects inside before removing the bucket.
+// When go-shares is configured, performs a soft delete (moves bucket to trash).
+// Falls back to hard delete (MinIO + shares cascade) when go-shares is not configured.
 // Requires the caller to own the bucket (explicit allowedBuckets entry or admin role).
 func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name string) {
-	if claims, ok := ClaimsFromContext(r.Context()); ok && !claims.OwnsBucket(name) {
+	claims, hasClaims := ClaimsFromContext(r.Context())
+	if hasClaims && !claims.OwnsBucket(name) {
 		jsonError(w, "you do not own this bucket", http.StatusForbidden)
 		return
 	}
@@ -240,7 +285,38 @@ func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
-	// Verify bucket exists
+	// ── Soft delete (go-shares configured) ───────────────────────────────────
+	if a.Shares != nil {
+		if !hasClaims {
+			jsonError(w, "authentication required to delete buckets", http.StatusUnauthorized)
+			return
+		}
+
+		exists, err := a.bucketExists(r, name)
+		if err != nil {
+			jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			jsonError(w, fmt.Sprintf("bucket %q not found", name), http.StatusNotFound)
+			return
+		}
+
+		if err := a.Shares.TrashBucket(r.Context(), name, claims.Subject, a.TrashRetentionDays); err != nil {
+			if strings.Contains(err.Error(), "already in trash") {
+				jsonError(w, "bucket is already in trash", http.StatusConflict)
+				return
+			}
+			jsonError(w, fmt.Sprintf("failed to trash bucket: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+		emitAudit(a, r, "bucket.trash", "/buckets/"+name, http.StatusNoContent)
+		return
+	}
+
+	// ── Hard delete fallback (go-shares not configured) ───────────────────────
 	exists, err := a.bucketExists(r, name)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
@@ -279,15 +355,6 @@ func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name s
 	}); err != nil {
 		jsonError(w, fmt.Sprintf("failed to delete bucket: %v", err), http.StatusInternalServerError)
 		return
-	}
-
-	// Best-effort: cascade-delete all shares for this bucket.
-	// Failure is logged but does not block the response — bucket is already gone.
-	if a.Shares != nil {
-		if err := a.Shares.DeleteSharesForBucket(r.Context(), name); err != nil {
-			// Non-fatal: stale shares will be invisible (bucket is gone) and cleaned on next query.
-			_ = err
-		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -404,4 +471,88 @@ func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldNam
 		CreatedAt time.Time `json:"created_at"`
 	}{Name: body.NewName, CreatedAt: time.Now().UTC()})
 	emitAudit(a, r, "bucket.rename", "/buckets/"+oldName+"/rename", http.StatusOK)
+}
+
+// ListBucketTrashHandler handles GET /buckets/trash.
+// Returns buckets in trash owned by the authenticated user.
+func (a *App) ListBucketTrashHandler(w http.ResponseWriter, r *http.Request) {
+	if a.Shares == nil {
+		jsonError(w, "trash feature not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	claims, ok := ClaimsFromContext(r.Context())
+	if !ok || claims.Subject == "" {
+		jsonError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	buckets, err := a.Shares.GetTrashedBuckets(r.Context(), claims.Subject)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("failed to list trashed buckets: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": buckets}) //nolint:errcheck
+	emitAudit(a, r, "bucket.trash.list", "/buckets/trash", http.StatusOK)
+}
+
+// RestoreBucketHandler handles POST /buckets/{name}/restore.
+// Removes the bucket from trash so it becomes accessible again.
+func (a *App) RestoreBucketHandler(w http.ResponseWriter, r *http.Request, name string) {
+	if a.Shares == nil {
+		jsonError(w, "trash feature not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	if claims, ok := ClaimsFromContext(r.Context()); ok && !claims.OwnsBucket(name) {
+		jsonError(w, "you do not own this bucket", http.StatusForbidden)
+		return
+	}
+
+	if name == "" {
+		jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := a.Shares.RestoreBucket(r.Context(), name); err != nil {
+		if strings.Contains(err.Error(), "not found in trash") {
+			jsonError(w, "bucket not found in trash", http.StatusNotFound)
+			return
+		}
+		jsonError(w, fmt.Sprintf("failed to restore bucket: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	emitAudit(a, r, "bucket.restore", "/buckets/"+name+"/restore", http.StatusNoContent)
+}
+
+// setTrashLifecycleRule sets a MinIO lifecycle rule on a bucket so that objects
+// under the __trash__/ prefix are automatically hard-deleted after TrashRetentionDays.
+// Failure is non-fatal — bucket creation is not blocked.
+func (a *App) setTrashLifecycleRule(ctx context.Context, bucket string) {
+	days := int32(a.TrashRetentionDays)
+	_, err := a.S3Client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{
+			Rules: []types.LifecycleRule{
+				{
+					ID:     aws.String("trash-expiry"),
+					Status: types.ExpirationStatusEnabled,
+					Filter: &types.LifecycleRuleFilter{
+						Prefix: aws.String("__trash__/"),
+					},
+					Expiration: &types.LifecycleExpiration{
+						Days: aws.Int32(days),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		// Non-fatal: lifecycle rule failure should not block bucket creation
+		_ = err
+	}
 }

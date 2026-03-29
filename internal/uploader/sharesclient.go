@@ -243,5 +243,151 @@ func (s *SharesClient) DeleteSharesForBucket(ctx context.Context, bucket string)
 	return nil
 }
 
+// IsBucketDeleted checks whether a bucket is soft-deleted (in trash).
+// Result is cached for sharesCacheTTL to avoid per-request HTTP calls.
+func (s *SharesClient) IsBucketDeleted(ctx context.Context, bucket string) (bool, error) {
+	cacheKey := bucket + "\x00__deleted__"
+	if v, ok := s.cache.Load(cacheKey); ok {
+		e := v.(sharesCacheEntry)
+		if time.Now().Before(e.expiresAt) {
+			return e.hasAccess, nil
+		}
+	}
+
+	endpoint := fmt.Sprintf("%s/internal/buckets/%s/deleted", s.baseURL, url.PathEscape(bucket))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Deleted bool `json:"deleted"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body) //nolint:errcheck
+
+	s.cache.Store(cacheKey, sharesCacheEntry{
+		hasAccess: body.Deleted,
+		expiresAt: time.Now().Add(sharesCacheTTL),
+	})
+
+	return body.Deleted, nil
+}
+
+// TrashBucket soft-deletes a bucket by calling go-shares.
+func (s *SharesClient) TrashBucket(ctx context.Context, bucketName, ownerUserID string, retentionDays int) error {
+	payload := fmt.Sprintf(`{"bucketName":%q,"ownerUserId":%q,"retentionDays":%d}`,
+		bucketName, ownerUserID, retentionDays)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.baseURL+"/internal/buckets/trash",
+		jsonReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("bucket is already in trash")
+	}
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	s.InvalidateCache(bucketName)
+	return nil
+}
+
+// RestoreBucket removes a bucket from trash in go-shares.
+func (s *SharesClient) RestoreBucket(ctx context.Context, bucketName string) error {
+	endpoint := fmt.Sprintf("%s/internal/buckets/trash/%s", s.baseURL, url.PathEscape(bucketName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("bucket not found in trash")
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	s.InvalidateCache(bucketName)
+	return nil
+}
+
+// GetTrashedBuckets returns all trashed buckets for a given owner.
+func (s *SharesClient) GetTrashedBuckets(ctx context.Context, ownerUserID string) ([]map[string]interface{}, error) {
+	endpoint := fmt.Sprintf("%s/internal/buckets/trash?ownerUserId=%s", s.baseURL, url.QueryEscape(ownerUserID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if body.Data == nil {
+		body.Data = []map[string]interface{}{}
+	}
+	return body.Data, nil
+}
+
+// PurgeBucketRecord removes the deleted_buckets DB record after a hard delete.
+func (s *SharesClient) PurgeBucketRecord(ctx context.Context, bucketName string) error {
+	endpoint := fmt.Sprintf("%s/internal/buckets/trash/%s/purge", s.baseURL, url.PathEscape(bucketName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("bucket record not found")
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // jsonReader returns a strings.Reader for an inline JSON string.
 func jsonReader(s string) *strings.Reader { return strings.NewReader(s) }
