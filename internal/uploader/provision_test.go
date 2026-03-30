@@ -26,6 +26,11 @@ func (m *MockKeycloakGranter) GrantBucket(ctx context.Context, email, bucket str
 	return args.Error(0)
 }
 
+func (m *MockKeycloakGranter) DeleteUser(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
 // ── sanitizeUsername ──────────────────────────────────────────────────────────
 
 func TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided(t *testing.T) {

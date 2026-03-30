@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -386,6 +387,39 @@ func (s *SharesClient) PurgeBucketRecord(ctx context.Context, bucketName string)
 		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
 	}
 
+	return nil
+}
+
+// DeleteUserShares removes all share records involving a user — both shares they own and
+// shares they have been given. Requires two calls because owner_user_id stores a Keycloak
+// UUID while sharee_user_id stores an email address.
+// Best-effort: errors are logged but never returned so account deletion is not blocked.
+func (s *SharesClient) DeleteUserShares(ctx context.Context, userID, email string) {
+	if err := s.deleteUserByIdentifier(ctx, userID); err != nil {
+		log.Printf("shares: delete owner-side shares for %s: %v", userID, err)
+	}
+	if err := s.deleteUserByIdentifier(ctx, email); err != nil {
+		log.Printf("shares: delete sharee-side shares for %s: %v", email, err)
+	}
+}
+
+func (s *SharesClient) deleteUserByIdentifier(ctx context.Context, identifier string) error {
+	endpoint := fmt.Sprintf("%s/internal/shares/user/%s", s.baseURL, url.PathEscape(identifier))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
 	return nil
 }
 
