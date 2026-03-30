@@ -64,6 +64,14 @@ func TestDeleteAccountHandler_ShouldHardDeleteAllOwnedBuckets_WhenCalled(t *test
 	mockS3 := new(MockS3Client)
 	app := newTestApp(mockS3)
 
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("user-files")},
+				{Name: aws.String("user-files--photos")},
+			},
+		}, nil)
+
 	// Both owned buckets get listed, objects deleted, and bucket deleted.
 	for _, bucket := range []string{"user-files", "user-files--photos"} {
 		b := bucket
@@ -98,6 +106,7 @@ func TestDeleteAccountHandler_ShouldSkipWildcardBucket_WhenAdminClaims(t *testin
 
 	req, _ := http.NewRequest(http.MethodDelete, "/users/me", nil)
 	// Admin claims: AllowedBuckets = ["*"] — no real bucket name, should make no S3 calls.
+	// ListBuckets scan is also skipped for admin to avoid wiping all of MinIO.
 	req = req.WithContext(context.WithValue(req.Context(), claimsKey, &Claims{
 		Subject:        "admin-uuid",
 		Email:          "admin@example.com",
@@ -111,6 +120,7 @@ func TestDeleteAccountHandler_ShouldSkipWildcardBucket_WhenAdminClaims(t *testin
 
 	// Assert
 	assert.Equal(t, http.StatusNoContent, rr.Code)
+	mockS3.AssertNotCalled(t, "ListBuckets")
 	mockS3.AssertNotCalled(t, "ListObjectsV2")
 	mockS3.AssertNotCalled(t, "DeleteBucket")
 }
@@ -120,6 +130,13 @@ func TestDeleteAccountHandler_ShouldSkipSharesStep_WhenSharesNil(t *testing.T) {
 	mockS3 := new(MockS3Client)
 	app := newTestApp(mockS3) // app.Shares is nil
 
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("user-files")},
+				{Name: aws.String("user-files--photos")},
+			},
+		}, nil)
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListObjectsV2Output{}, nil)
 	mockS3.On("DeleteBucket", mock.Anything, mock.Anything, mock.Anything).
@@ -154,6 +171,13 @@ func TestDeleteAccountHandler_ShouldCallDeleteUserSharesTwice_WhenSharesConfigur
 	app := newTestApp(mockS3)
 	app.Shares = NewSharesClient(fakeShares.URL, "test-secret")
 
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("user-files")},
+				{Name: aws.String("user-files--photos")},
+			},
+		}, nil)
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListObjectsV2Output{}, nil)
 	mockS3.On("DeleteBucket", mock.Anything, mock.Anything, mock.Anything).
@@ -180,6 +204,13 @@ func TestDeleteAccountHandler_ShouldDeleteKeycloakUser_WhenGranterConfigured(t *
 	app := newTestApp(mockS3)
 	app.KeycloakGranter = mockGranter
 
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("user-files")},
+				{Name: aws.String("user-files--photos")},
+			},
+		}, nil)
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListObjectsV2Output{}, nil)
 	mockS3.On("DeleteBucket", mock.Anything, mock.Anything, mock.Anything).
@@ -205,6 +236,13 @@ func TestDeleteAccountHandler_ShouldReturn204EvenIfKeycloakFails_WhenDataDeleted
 	app := newTestApp(mockS3)
 	app.KeycloakGranter = mockGranter
 
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("user-files")},
+				{Name: aws.String("user-files--photos")},
+			},
+		}, nil)
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListObjectsV2Output{}, nil)
 	mockS3.On("DeleteBucket", mock.Anything, mock.Anything, mock.Anything).
@@ -228,6 +266,14 @@ func TestDeleteAccountHandler_ShouldContinueAfterBucketError_WhenOneMinIOCallFai
 	// Arrange
 	mockS3 := new(MockS3Client)
 	app := newTestApp(mockS3)
+
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("user-files")},
+				{Name: aws.String("user-files--photos")},
+			},
+		}, nil)
 
 	// First bucket fails on list; second bucket succeeds.
 	mockS3.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{Bucket: aws.String("user-files")}, mock.Anything).
@@ -313,6 +359,77 @@ func TestHardDeleteBucket_ShouldReturnNil_WhenBucketNotFound(t *testing.T) {
 	// Assert — bucket not found is treated as success (idempotent).
 	assert.NoError(t, err)
 	mockS3.AssertNotCalled(t, "DeleteBucket")
+}
+
+func TestDeleteAccountHandler_ShouldDeleteSubBuckets_WhenJWTIsStale(t *testing.T) {
+	// Arrange: JWT only carries the root bucket — sub-bucket was created after the
+	// last token refresh and is therefore absent from AllowedBuckets.
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	// MinIO ground truth: root bucket + stale sub-bucket not yet in the JWT.
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{
+			Buckets: []types.Bucket{
+				{Name: aws.String("qwer")},
+				{Name: aws.String("qwer--level-1")},
+			},
+		}, nil)
+
+	// Both buckets must be hard-deleted.
+	for _, bucket := range []string{"qwer", "qwer--level-1"} {
+		b := bucket
+		mockS3.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{Bucket: aws.String(b)}, mock.Anything).
+			Return(&s3.ListObjectsV2Output{}, nil)
+		mockS3.On("DeleteBucket", mock.Anything, &s3.DeleteBucketInput{Bucket: aws.String(b)}, mock.Anything).
+			Return(&s3.DeleteBucketOutput{}, nil)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, "/users/me", nil)
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey, &Claims{
+		Subject:        "user-sub-uuid",
+		Email:          "qwer@gmail.com",
+		AllowedBuckets: []string{"qwer"}, // stale — qwer--level-1 missing
+		Role:           "user",
+	}))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DeleteAccountHandler(rr, req)
+
+	// Assert: both root and stale sub-bucket are deleted.
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestDeleteAccountHandler_ShouldFallBackToJWTBuckets_WhenListBucketsFails(t *testing.T) {
+	// Arrange: ListBuckets fails; handler must still delete JWT-listed buckets (best-effort).
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return((*s3.ListBucketsOutput)(nil), fmt.Errorf("MinIO unavailable"))
+
+	mockS3.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{Bucket: aws.String("qwer")}, mock.Anything).
+		Return(&s3.ListObjectsV2Output{}, nil)
+	mockS3.On("DeleteBucket", mock.Anything, &s3.DeleteBucketInput{Bucket: aws.String("qwer")}, mock.Anything).
+		Return(&s3.DeleteBucketOutput{}, nil)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/users/me", nil)
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey, &Claims{
+		Subject:        "user-sub-uuid",
+		Email:          "qwer@gmail.com",
+		AllowedBuckets: []string{"qwer"},
+		Role:           "user",
+	}))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DeleteAccountHandler(rr, req)
+
+	// Assert: 204 even when ListBuckets fails — best-effort pattern.
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	mockS3.AssertExpectations(t)
 }
 
 // ── response helpers ──────────────────────────────────────────────────────────
