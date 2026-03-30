@@ -121,6 +121,7 @@ func main() {
 	http.Handle("/files/", wrap(http.HandlerFunc(app.FilesHandler)))
 	http.Handle("/buckets", wrap(http.HandlerFunc(app.BucketsHandler)))
 	http.Handle("/buckets/", wrap(http.HandlerFunc(app.BucketItemHandler)))
+	http.Handle("/users/me", wrap(http.HandlerFunc(app.DeleteAccountHandler)))
 
 	// ── Internal routes (server-to-server, shared secret auth) ───────────────
 	internalSecret := os.Getenv("INTERNAL_API_SECRET")

@@ -10,10 +10,11 @@ import (
 	"strings"
 )
 
-// KeycloakGranter sets a user's allowed_buckets attribute in Keycloak after bucket provisioning.
-// A nil KeycloakGranter skips this step (dev/test mode or when admin credentials are not configured).
+// KeycloakGranter manages user attributes and lifecycle in Keycloak via the admin API.
+// A nil KeycloakGranter skips all Keycloak calls (dev/test mode or when admin credentials are not configured).
 type KeycloakGranter interface {
 	GrantBucket(ctx context.Context, email, bucket string) error
+	DeleteUser(ctx context.Context, userID string) error
 }
 
 // HTTPKeycloakGranter calls the Keycloak admin API using admin credentials.
@@ -165,6 +166,33 @@ func (g *HTTPKeycloakGranter) updateUserAttrs(ctx context.Context, token, userID
 
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("update user endpoint returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// DeleteUser permanently removes a user from Keycloak by their subject UUID.
+// Called as part of account deletion — after all data has already been wiped.
+func (g *HTTPKeycloakGranter) DeleteUser(ctx context.Context, userID string) error {
+	token, err := g.getAdminToken(ctx)
+	if err != nil {
+		return fmt.Errorf("get admin token: %w", err)
+	}
+
+	userURL := fmt.Sprintf("%s/admin/realms/%s/users/%s", g.adminBaseURL, g.realm, userID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, userURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("delete user endpoint returned %d", resp.StatusCode)
 	}
 	return nil
 }
