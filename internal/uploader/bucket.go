@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -253,6 +254,13 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 	// Set MinIO lifecycle rule for __trash__/ prefix auto-expiry.
 	if a.TrashRetentionDays > 0 {
 		a.setTrashLifecycleRule(r.Context(), body.Name)
+	}
+
+	// Set per-user SSE-KMS encryption on sub-buckets (best-effort, non-fatal).
+	// Requires VaultClient to be configured and claims to carry a Subject (Keycloak sub UUID).
+	// For top-level buckets (admin-created), Subject is the admin's — skip per-user key isolation.
+	if body.Parent != "" && a.VaultClient != nil && hasClaims && claims.Subject != "" {
+		a.provisionSSEKey(r.Context(), body.Name, claims.Subject)
 	}
 
 	// Grant the new sub-bucket in Keycloak so it appears in the user's JWT on next token refresh.
@@ -527,6 +535,31 @@ func (a *App) RestoreBucketHandler(w http.ResponseWriter, r *http.Request, name 
 
 	w.WriteHeader(http.StatusNoContent)
 	emitAudit(a, r, "bucket.restore", "/buckets/"+name+"/restore", http.StatusNoContent)
+}
+
+// provisionSSEKey provisions a per-user Vault transit key and sets SSE-KMS default
+// encryption on the bucket. Non-fatal: logs errors but never blocks bucket creation.
+func (a *App) provisionSSEKey(ctx context.Context, bucket, sub string) {
+	keyName := userKeyName(sub)
+	if err := a.VaultClient.ProvisionKey(ctx, sub); err != nil {
+		log.Printf("vault: provision key for %s: %v", sub, err)
+		return
+	}
+	if _, err := a.S3Client.PutBucketEncryption(ctx, &s3.PutBucketEncryptionInput{
+		Bucket: aws.String(bucket),
+		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
+			Rules: []types.ServerSideEncryptionRule{
+				{
+					ApplyServerSideEncryptionByDefault: &types.ServerSideEncryptionByDefault{
+						SSEAlgorithm:   types.ServerSideEncryptionAwsKms,
+						KMSMasterKeyID: aws.String(keyName),
+					},
+				},
+			},
+		},
+	}); err != nil {
+		log.Printf("minio: set SSE-KMS on bucket %q (key=%s): %v", bucket, keyName, err)
+	}
 }
 
 // setTrashLifecycleRule sets a MinIO lifecycle rule on a bucket so that objects

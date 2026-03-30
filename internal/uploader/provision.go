@@ -11,6 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+// provisionRequest is the body for POST /internal/provision-user.
+type provisionRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Subject  string `json:"subject"` // Keycloak sub UUID — used for per-user SSE-KMS key
+}
+
 // InternalSecretMiddleware guards internal endpoints with a shared secret.
 // If secret is empty (dev mode), all requests are allowed.
 func InternalSecretMiddleware(secret string, next http.Handler) http.Handler {
@@ -49,10 +56,7 @@ func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-	}
+	var body provisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
@@ -81,6 +85,11 @@ func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status = "created"
+
+		// Set per-user SSE-KMS encryption on the user's primary bucket (best-effort, non-fatal).
+		if a.VaultClient != nil && body.Subject != "" {
+			a.provisionSSEKey(r.Context(), bucketName, body.Subject)
+		}
 	}
 
 	// Grant Keycloak access regardless of whether bucket was just created or already existed,

@@ -50,6 +50,20 @@ func main() {
 		log.Println("Keycloak admin credentials not set — bucket provisioning skips Keycloak attribute update")
 	}
 
+	// ── Vault client (SSE-KMS key lifecycle) ─────────────────────────────────
+	if vaultAddr := os.Getenv("VAULT_ADDR"); vaultAddr != "" {
+		vaultToken := os.Getenv("VAULT_TOKEN")
+		vc := uploader.NewVaultClient(vaultAddr, vaultToken)
+		if vc != nil {
+			app.VaultClient = vc
+			log.Printf("Vault client configured (addr=%s) — SSE-KMS key lifecycle enabled", vaultAddr)
+		} else {
+			log.Println("VAULT_TOKEN not set — SSE-KMS key lifecycle disabled")
+		}
+	} else {
+		log.Println("VAULT_ADDR not set — SSE-KMS key lifecycle disabled")
+	}
+
 	// ── Shares client (go-shares) ─────────────────────────────────────────────
 	if sharesURL := os.Getenv("GO_SHARES_URL"); sharesURL != "" {
 		sharesSecret := os.Getenv("INTERNAL_API_SECRET")

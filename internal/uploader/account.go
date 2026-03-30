@@ -46,6 +46,15 @@ func (a *App) DeleteAccountHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Step 1.5: Crypto-shred — delete the user's Vault encryption key (GDPR Art. 17).
+	// This makes any remaining encrypted data permanently inaccessible, even if
+	// the MinIO deletion above failed for some objects.
+	if a.VaultClient != nil {
+		if err := a.VaultClient.DeleteKey(ctx, claims.Subject); err != nil {
+			log.Printf("account delete: Vault key for %s: %v", claims.Subject, err)
+		}
+	}
+
 	// Step 2: Remove all share records (best-effort).
 	if a.Shares != nil {
 		a.Shares.DeleteUserShares(ctx, claims.Subject, claims.Email)

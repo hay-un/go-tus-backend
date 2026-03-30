@@ -35,6 +35,7 @@ type S3API interface {
 	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
 	CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 	PutBucketLifecycleConfiguration(ctx context.Context, params *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
+	PutBucketEncryption(ctx context.Context, params *s3.PutBucketEncryptionInput, optFns ...func(*s3.Options)) (*s3.PutBucketEncryptionOutput, error)
 }
 
 // App holds the dependencies for the uploader service.
@@ -47,6 +48,7 @@ type App struct {
 	Audit              AuditProducer   // never nil; use NoopAuditProducer in tests
 	Shares             *SharesClient   // nil when GO_SHARES_URL not configured
 	KeycloakGranter    KeycloakGranter // nil when admin credentials not configured
+	VaultClient        *VaultClient    // nil when VAULT_ADDR not configured (SSE-KMS disabled)
 	TrashRetentionDays int             // 0 = no lifecycle rule set on bucket creation
 	tusHandlers        sync.Map        // map[string]http.Handler — per-user-bucket TUS handlers
 }

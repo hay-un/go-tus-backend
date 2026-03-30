@@ -171,6 +171,14 @@ func (m *MockS3Client) PutBucketLifecycleConfiguration(ctx context.Context, inpu
 	return args.Get(0).(*s3.PutBucketLifecycleConfigurationOutput), args.Error(1)
 }
 
+func (m *MockS3Client) PutBucketEncryption(ctx context.Context, input *s3.PutBucketEncryptionInput, optFns ...func(*s3.Options)) (*s3.PutBucketEncryptionOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.PutBucketEncryptionOutput), args.Error(1)
+}
+
 // ── TUS handler creation ──────────────────────────────────────────────────────
 
 func TestNewTusHandler_ShouldCreateHandler_WhenValidBucketAndClientProvided(t *testing.T) {
