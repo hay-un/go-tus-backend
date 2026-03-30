@@ -215,8 +215,17 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !claims.OwnsBucket(body.Parent) {
-			jsonError(w, "you do not own the parent bucket", http.StatusForbidden)
-			return
+			// Fallback: JWT may be stale right after first-login provisioning.
+			// Allow if parent is the user's expected default bucket and exists in MinIO.
+			if !isHomeBucket(claims.Email, body.Parent) {
+				jsonError(w, "you do not own the parent bucket", http.StatusForbidden)
+				return
+			}
+			exists, err := a.bucketExists(r, body.Parent)
+			if err != nil || !exists {
+				jsonError(w, "you do not own the parent bucket", http.StatusForbidden)
+				return
+			}
 		}
 		// Full MinIO bucket name: "{parent}--{child}"
 		body.Name = body.Parent + "--" + body.Name
@@ -589,3 +598,4 @@ func (a *App) setTrashLifecycleRule(ctx context.Context, bucket string) {
 		_ = err
 	}
 }
+

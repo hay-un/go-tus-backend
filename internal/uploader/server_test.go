@@ -699,3 +699,27 @@ func TestRestoreFileHandler_ShouldReturn409_WhenOriginalFileExists(t *testing.T)
 	assert.Equal(t, http.StatusConflict, rr.Code)
 	mockS3.AssertNotCalled(t, "CopyObject")
 }
+
+func TestIsHomeBucket_ShouldReturnTrue_WhenBucketMatchesEmailLocalPart(t *testing.T) {
+	assert.True(t, isHomeBucket("ridhopratamavd@gmail.com", "ridhopratamavd-files"))
+}
+
+func TestIsHomeBucket_ShouldReturnTrue_WhenEmailLocalPartHasSpecialChars(t *testing.T) {
+	assert.True(t, isHomeBucket("john.doe+tag@example.com", "john-doe-tag-files"))
+}
+
+func TestIsHomeBucket_ShouldReturnFalse_WhenBucketDoesNotMatch(t *testing.T) {
+	assert.False(t, isHomeBucket("ridhopratamavd@gmail.com", "other-files"))
+}
+
+func TestIsHomeBucket_ShouldReturnFalse_WhenEmailHasNoAtSign(t *testing.T) {
+	assert.False(t, isHomeBucket("notanemail", "notanemail-files"))
+}
+
+func TestIsHomeBucket_ShouldReturnFalse_WhenEmailIsEmpty(t *testing.T) {
+	assert.False(t, isHomeBucket("", "ridhopratamavd-files"))
+}
+
+func TestIsHomeBucket_ShouldReturnFalse_WhenAtSignIsAtStart(t *testing.T) {
+	assert.False(t, isHomeBucket("@gmail.com", "files"))
+}

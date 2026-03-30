@@ -55,7 +55,8 @@ type App struct {
 
 // canAccessBucket returns true if the given claims grant access to bucket.
 // Checks bucket trash status first (deleted bucket = zero access for everyone).
-// Then checks JWT allowedBuckets, then falls back to go-shares share access.
+// Then checks JWT allowedBuckets, then the user's home bucket derived from email,
+// then falls back to go-shares share access.
 func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string) bool {
 	// Bucket in trash = zero access for owner and all sharees
 	if a.Shares != nil {
@@ -66,6 +67,12 @@ func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string
 	if claims.CanAccessBucket(bucket) {
 		return true
 	}
+	// Allow access if the bucket is the user's own home bucket, derived from their email.
+	// This handles the window between first login and the JWT being refreshed to include
+	// allowedBuckets (which Keycloak sets after /internal/provision-user runs).
+	if claims.Email != "" && isHomeBucket(claims.Email, bucket) {
+		return true
+	}
 	if a.Shares == nil || claims.Email == "" {
 		return false
 	}
@@ -74,6 +81,16 @@ func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string
 		return false // fail closed
 	}
 	return ok
+}
+
+// isHomeBucket returns true if bucket is the user's provisioned home bucket.
+// Home bucket = sanitizeUsername(localpart of email) + "-files".
+func isHomeBucket(email, bucket string) bool {
+	at := strings.Index(email, "@")
+	if at <= 0 {
+		return false
+	}
+	return sanitizeUsername(email[:at])+"-files" == bucket
 }
 
 // NewAppFromEnv initializes the App using environment variables.

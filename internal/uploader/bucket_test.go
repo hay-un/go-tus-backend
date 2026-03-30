@@ -703,3 +703,64 @@ func TestCreateBucketHandler_ShouldNotCallGrantBucket_WhenCreatingTopLevelBucket
 	mockGranter.AssertNotCalled(t, "GrantBucket")
 	mockS3.AssertExpectations(t)
 }
+
+// TestCreateBucketHandler_ShouldAllowSubBucket_WhenJWTHasNoAllowedBucketsButParentIsUsersDefault
+// guards the race condition where allowedBuckets is empty in the JWT right after first-login
+// provisioning (Keycloak attribute not yet propagated), but the user's default bucket exists in MinIO.
+func TestCreateBucketHandler_ShouldAllowSubBucket_WhenJWTHasNoAllowedBucketsButParentIsUsersDefault(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	// bucketExists check for the parent (fallback ownership path)
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "ridho-files"
+	}), mock.Anything).Return(nil, nil)
+
+	// bucketExists check for the new sub-bucket (duplicate check)
+	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
+		return aws.ToString(in.Bucket) == "ridho-files--work"
+	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+
+	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
+		return aws.ToString(in.Bucket) == "ridho-files--work"
+	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+
+	body := `{"name":"work","parent":"ridho-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	// Stale JWT: AllowedBuckets is empty (not yet propagated after first-login provisioning)
+	claims := &Claims{Subject: "ridho-uuid", Email: "ridho@gmail.com", AllowedBuckets: []string{}, Role: "user"}
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey, claims))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	var resp map[string]interface{}
+	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Equal(t, "ridho-files--work", resp["name"])
+	mockS3.AssertExpectations(t)
+}
+
+func TestCreateBucketHandler_ShouldReturn403_WhenJWTEmptyAndEmailDoesNotMatchParent(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	body := `{"name":"work","parent":"ridho-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	// Different email: other@gmail.com → expected bucket is "other-files", not "ridho-files"
+	claims := &Claims{Subject: "other-uuid", Email: "other@gmail.com", AllowedBuckets: []string{}, Role: "user"}
+	req = req.WithContext(context.WithValue(req.Context(), claimsKey, claims))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "you do not own the parent bucket")
+	mockS3.AssertNotCalled(t, "CreateBucket")
+}
