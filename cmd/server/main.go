@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/segmentio/kafka-go"
 
 	"music-streaming/backend/internal/uploader"
 )
@@ -53,6 +57,35 @@ func main() {
 		log.Printf("go-shares client configured (url=%s)", sharesURL)
 	} else {
 		log.Println("GO_SHARES_URL not set — sharing feature disabled")
+	}
+
+	// ── Purge consumer (Kafka topic: codirs-purge) ────────────────────────────
+	// Listens for bucket.purge events published by go-shares purge ticker.
+	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+		purgeTopic := os.Getenv("KAFKA_PURGE_TOPIC")
+		if purgeTopic == "" {
+			purgeTopic = "codirs-purge"
+		}
+		reader := kafka.NewReader(kafka.ReaderConfig{
+			Brokers:  strings.Split(brokers, ","),
+			Topic:    purgeTopic,
+			GroupID:  "go-tus-purge",
+			MinBytes: 1,
+			MaxBytes: 1e6,
+			MaxWait:  1 * time.Second,
+		})
+		go func() {
+			defer reader.Close() //nolint:errcheck
+			log.Printf("Purge consumer started (topic: %s)", purgeTopic)
+			for {
+				msg, err := reader.ReadMessage(context.Background())
+				if err != nil {
+					log.Printf("purge consumer: read error: %v", err)
+					continue
+				}
+				app.ProcessPurgeEvent(context.Background(), msg.Value)
+			}
+		}()
 	}
 
 	// ── JWT middleware ────────────────────────────────────────────────────────

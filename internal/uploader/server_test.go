@@ -163,6 +163,14 @@ func (m *MockS3Client) CopyObject(ctx context.Context, input *s3.CopyObjectInput
 	return args.Get(0).(*s3.CopyObjectOutput), args.Error(1)
 }
 
+func (m *MockS3Client) PutBucketLifecycleConfiguration(ctx context.Context, input *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+	args := m.Called(ctx, input, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*s3.PutBucketLifecycleConfigurationOutput), args.Error(1)
+}
+
 // ── TUS handler creation ──────────────────────────────────────────────────────
 
 func TestNewTusHandler_ShouldCreateHandler_WhenValidBucketAndClientProvided(t *testing.T) {
@@ -368,7 +376,7 @@ func TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 
 // ── DeleteFileHandler ─────────────────────────────────────────────────────────
 
-func TestDeleteFileHandler_ShouldDeleteFileAndSidecar_WhenFileExists(t *testing.T) {
+func TestDeleteFileHandler_ShouldMoveFileToTrash_WhenFileExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
 	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
@@ -377,6 +385,19 @@ func TestDeleteFileHandler_ShouldDeleteFileAndSidecar_WhenFileExists(t *testing.
 		return aws.ToString(input.Bucket) == "my-bucket" && aws.ToString(input.Key) == "abc123"
 	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
 
+	// Expect CopyObject to __trash__/abc123
+	mockS3.On("CopyObject", mock.Anything, mock.MatchedBy(func(input *s3.CopyObjectInput) bool {
+		return aws.ToString(input.Bucket) == "my-bucket" &&
+			aws.ToString(input.Key) == "__trash__/abc123" &&
+			aws.ToString(input.CopySource) == "my-bucket/abc123"
+	}), mock.Anything).Return(&s3.CopyObjectOutput{}, nil)
+
+	// Best-effort .info sidecar copy (may fail, not blocking)
+	mockS3.On("CopyObject", mock.Anything, mock.MatchedBy(func(input *s3.CopyObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123.info"
+	}), mock.Anything).Return(&s3.CopyObjectOutput{}, nil)
+
+	// Expect DeleteObjects to remove originals
 	mockS3.On("DeleteObjects", mock.Anything, mock.MatchedBy(func(input *s3.DeleteObjectsInput) bool {
 		if aws.ToString(input.Bucket) != "my-bucket" {
 			return false
@@ -517,4 +538,156 @@ func TestDeleteFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 	assert.Contains(t, rr.Body.String(), "access denied")
 	mockS3.AssertNotCalled(t, "HeadObject")
+}
+
+// ── ListFileTrashHandler ──────────────────────────────────────────────────────
+
+func TestListFileTrashHandler_ShouldReturnTrashedFiles_WhenTrashHasFiles(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(input *s3.ListObjectsV2Input) bool {
+		return aws.ToString(input.Bucket) == "my-bucket" && aws.ToString(input.Prefix) == "__trash__/"
+	}), mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents: []types.Object{
+			{Key: aws.String("__trash__/abc123"), Size: aws.Int64(500)},
+			{Key: aws.String("__trash__/abc123.info"), Size: aws.Int64(50)},
+		},
+	}, nil)
+
+	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123.info"
+	}), mock.Anything).Return(&s3.GetObjectOutput{
+		Body: io.NopCloser(strings.NewReader(`{"MetaData": {"filename": "deleted-file.mp4"}}`)),
+	}, nil)
+
+	req, _ := http.NewRequest("GET", "/files/my-bucket/trash", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ListFileTrashHandler(rr, req, "my-bucket")
+
+	// Assert
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "abc123")
+	assert.Contains(t, rr.Body.String(), "deleted-file.mp4")
+	assert.NotContains(t, rr.Body.String(), ".info", ".info sidecar must not appear in trash listing")
+	mockS3.AssertExpectations(t)
+}
+
+func TestListFileTrashHandler_ShouldReturnEmptyData_WhenTrashIsEmpty(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents: []types.Object{},
+	}, nil)
+
+	req, _ := http.NewRequest("GET", "/files/my-bucket/trash", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ListFileTrashHandler(rr, req, "my-bucket")
+
+	// Assert
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"data":[]`)
+	mockS3.AssertExpectations(t)
+}
+
+// ── RestoreFileHandler ────────────────────────────────────────────────────────
+
+func TestRestoreFileHandler_ShouldRestoreFile_WhenFileIsInTrash(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// File exists in trash
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123"
+	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
+
+	// Original location is free
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "abc123"
+	}), mock.Anything).Return(nil, &types.NotFound{})
+
+	// Copy back to original
+	mockS3.On("CopyObject", mock.Anything, mock.MatchedBy(func(input *s3.CopyObjectInput) bool {
+		return aws.ToString(input.Key) == "abc123" &&
+			aws.ToString(input.CopySource) == "my-bucket/__trash__/abc123"
+	}), mock.Anything).Return(&s3.CopyObjectOutput{}, nil)
+
+	// Best-effort .info restore
+	mockS3.On("CopyObject", mock.Anything, mock.MatchedBy(func(input *s3.CopyObjectInput) bool {
+		return aws.ToString(input.Key) == "abc123.info"
+	}), mock.Anything).Return(&s3.CopyObjectOutput{}, nil)
+
+	// Delete trash copies
+	mockS3.On("DeleteObjects", mock.Anything, mock.MatchedBy(func(input *s3.DeleteObjectsInput) bool {
+		keys := make(map[string]bool)
+		for _, obj := range input.Delete.Objects {
+			keys[aws.ToString(obj.Key)] = true
+		}
+		return keys["__trash__/abc123"] && keys["__trash__/abc123.info"]
+	}), mock.Anything).Return(&s3.DeleteObjectsOutput{}, nil)
+
+	req, _ := http.NewRequest("POST", "/files/my-bucket/trash/abc123/restore", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileHandler(rr, req, "my-bucket", "abc123")
+
+	// Assert
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestRestoreFileHandler_ShouldReturn404_WhenFileNotInTrash(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/ghost"
+	}), mock.Anything).Return(nil, &types.NotFound{})
+
+	req, _ := http.NewRequest("POST", "/files/my-bucket/trash/ghost/restore", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileHandler(rr, req, "my-bucket", "ghost")
+
+	// Assert
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	assert.Contains(t, rr.Body.String(), "not found in trash")
+	mockS3.AssertExpectations(t)
+}
+
+func TestRestoreFileHandler_ShouldReturn409_WhenOriginalFileExists(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// File in trash
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123"
+	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
+
+	// Original location occupied
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "abc123"
+	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
+
+	req, _ := http.NewRequest("POST", "/files/my-bucket/trash/abc123/restore", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileHandler(rr, req, "my-bucket", "abc123")
+
+	// Assert
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	mockS3.AssertNotCalled(t, "CopyObject")
 }

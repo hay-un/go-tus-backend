@@ -180,15 +180,19 @@ func TestDeleteBucketHandler_ShouldReturn204AndPurgeObjects_WhenBucketExists(t *
 	mockS3.AssertExpectations(t)
 }
 
-func TestDeleteBucketHandler_ShouldCascadeDeleteShares_WhenSharesConfigured(t *testing.T) {
-	// Arrange: stub go-shares server that records DELETE /internal/shares/bucket/{bucket}
-	var deletedBucket string
+func TestDeleteBucketHandler_ShouldSoftDelete_WhenSharesConfigured(t *testing.T) {
+	// Arrange: stub go-shares server that accepts POST /internal/buckets/trash (soft delete)
+	var trashedBucket string
 	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/internal/shares/bucket/") {
-			deletedBucket = strings.TrimPrefix(r.URL.Path, "/internal/shares/bucket/")
+		if r.Method == http.MethodPost && r.URL.Path == "/internal/buckets/trash" {
+			var body struct {
+				BucketName string `json:"bucketName"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			trashedBucket = body.BucketName
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"deleted":1}`))
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"test-id","bucketName":"shared-bucket"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -199,35 +203,31 @@ func TestDeleteBucketHandler_ShouldCascadeDeleteShares_WhenSharesConfigured(t *t
 	app := newTestApp(mockS3)
 	app.Shares = NewSharesClient(sharesServer.URL, "test-secret")
 
+	// Soft delete only needs to check that the bucket exists in MinIO
 	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
 		return aws.ToString(in.Bucket) == "shared-bucket"
 	}), mock.Anything).Return(&s3.HeadBucketOutput{}, nil)
 
-	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(in *s3.ListObjectsV2Input) bool {
-		return aws.ToString(in.Bucket) == "shared-bucket"
-	}), mock.Anything).Return(&s3.ListObjectsV2Output{}, nil)
-
-	mockS3.On("DeleteBucket", mock.Anything, mock.MatchedBy(func(in *s3.DeleteBucketInput) bool {
-		return aws.ToString(in.Bucket) == "shared-bucket"
-	}), mock.Anything).Return(&s3.DeleteBucketOutput{}, nil)
-
 	req, _ := http.NewRequest(http.MethodDelete, "/buckets/shared-bucket", nil)
 	req.URL.Path = "/buckets/shared-bucket"
+	// Owner must be authenticated for soft delete
+	req = withUserClaims(req, []string{"shared-bucket"})
 	rr := httptest.NewRecorder()
 
 	// Act
 	app.BucketItemHandler(rr, req)
 
-	// Assert
+	// Assert: soft delete → 204, MinIO bucket NOT deleted yet (stays until purge job runs)
 	assert.Equal(t, http.StatusNoContent, rr.Code)
-	assert.Equal(t, "shared-bucket", deletedBucket)
+	assert.Equal(t, "shared-bucket", trashedBucket)
+	mockS3.AssertNotCalled(t, "DeleteBucket")
 	mockS3.AssertExpectations(t)
 }
 
-func TestDeleteBucketHandler_ShouldStillReturn204_WhenSharesDeletionFails(t *testing.T) {
-	// Arrange: stub go-shares server that returns an error
+func TestDeleteBucketHandler_ShouldReturn401_WhenSharesConfiguredButNoAuth(t *testing.T) {
+	// Arrange: go-shares configured but no JWT claims in request
 	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusCreated)
 	}))
 	defer sharesServer.Close()
 
@@ -235,28 +235,17 @@ func TestDeleteBucketHandler_ShouldStillReturn204_WhenSharesDeletionFails(t *tes
 	app := newTestApp(mockS3)
 	app.Shares = NewSharesClient(sharesServer.URL, "test-secret")
 
-	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
-		return aws.ToString(in.Bucket) == "shared-bucket"
-	}), mock.Anything).Return(&s3.HeadBucketOutput{}, nil)
-
-	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(in *s3.ListObjectsV2Input) bool {
-		return aws.ToString(in.Bucket) == "shared-bucket"
-	}), mock.Anything).Return(&s3.ListObjectsV2Output{}, nil)
-
-	mockS3.On("DeleteBucket", mock.Anything, mock.MatchedBy(func(in *s3.DeleteBucketInput) bool {
-		return aws.ToString(in.Bucket) == "shared-bucket"
-	}), mock.Anything).Return(&s3.DeleteBucketOutput{}, nil)
-
-	req, _ := http.NewRequest(http.MethodDelete, "/buckets/shared-bucket", nil)
-	req.URL.Path = "/buckets/shared-bucket"
+	req, _ := http.NewRequest(http.MethodDelete, "/buckets/some-bucket", nil)
+	req.URL.Path = "/buckets/some-bucket"
+	// No claims injected
 	rr := httptest.NewRecorder()
 
 	// Act
 	app.BucketItemHandler(rr, req)
 
-	// Assert: shares deletion failure is best-effort — bucket delete still succeeds
-	assert.Equal(t, http.StatusNoContent, rr.Code)
-	mockS3.AssertExpectations(t)
+	// Assert: soft delete requires authentication
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	mockS3.AssertNotCalled(t, "HeadBucket")
 }
 
 func TestDeleteBucketHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {

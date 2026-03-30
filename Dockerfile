@@ -1,5 +1,5 @@
 # Builder Stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN apk add --no-cache git
 
 # Copy module files
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download -x
 
 # Copy source code
 COPY . .
@@ -18,14 +18,14 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o tus-server ./cmd/server
 
 # Dev Stage — live reload with go run
-FROM golang:1.23-alpine AS dev
+FROM golang:1.24-alpine AS dev
 
 WORKDIR /app
 
 RUN apk add --no-cache git
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download -x
 
 CMD ["go", "run", "./cmd/server"]
 
