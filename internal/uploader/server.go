@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -122,7 +123,7 @@ func NewAppFromEnv() (*App, error) {
 		return nil, fmt.Errorf("unable to load SDK config: %w", err)
 	}
 
-	// 2. Create S3 Client
+	// 2. Create S3 Client (internal — Docker network, used for all API calls)
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = true
 	})
@@ -139,10 +140,29 @@ func NewAppFromEnv() (*App, error) {
 		}
 	}
 
+	// 3. Create Presigner — uses public URL if configured so share links are externally accessible.
+	// MINIO_PUBLIC_URL should be set to the URL reachable from outside Docker (e.g. Tailscale host).
+	// When empty, falls back to S3_ENDPOINT (internal only — links won't work outside Docker).
+	presigner := s3.NewPresignClient(s3Client)
+	if publicURL := os.Getenv("MINIO_PUBLIC_URL"); publicURL != "" {
+		publicResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+			return aws.Endpoint{PartitionID: "aws", URL: publicURL, SigningRegion: region}, nil
+		})
+		publicCfg, err := config.LoadDefaultConfig(context.TODO(),
+			config.WithRegion(region),
+			config.WithEndpointResolverWithOptions(publicResolver),
+			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+		)
+		if err == nil {
+			publicS3 := s3.NewFromConfig(publicCfg, func(o *s3.Options) { o.UsePathStyle = true })
+			presigner = s3.NewPresignClient(publicS3)
+		}
+	}
+
 	return &App{
 		TusHandler:         tusHandler,
 		S3Client:           s3Client,
-		Presigner:          s3.NewPresignClient(s3Client),
+		Presigner:          presigner,
 		BucketName:         bucketName,
 		S3Endpoint:         s3Endpoint,
 		Audit:              &NoopAuditProducer{},
@@ -551,6 +571,15 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 
 	w.WriteHeader(http.StatusNoContent)
 	emitAudit(a, r, "file.delete", "/files/"+bucket+"/"+key, http.StatusNoContent)
+
+	// Best-effort: remove shared link records so deleted files don't appear in the share history.
+	if a.Shares != nil {
+		go func() {
+			if err := a.Shares.DeleteSharedLinksByFileKey(context.Background(), bucket, key); err != nil {
+				log.Printf("shares: failed to cleanup shared links for deleted file %s/%s: %v", bucket, key, err)
+			}
+		}()
+	}
 }
 
 // ListFileTrashHandler lists files in the __trash__/ prefix of a user bucket.

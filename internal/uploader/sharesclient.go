@@ -528,5 +528,29 @@ func (s *SharesClient) DeleteSharedLink(ctx context.Context, id, ownerUserID str
 	return nil
 }
 
+// DeleteSharedLinksByFileKey calls go-shares to remove all shared link records for a specific file.
+// Called when a file is deleted so stale records don't appear in the history dashboard.
+func (s *SharesClient) DeleteSharedLinksByFileKey(ctx context.Context, bucket, fileKey string) error {
+	endpoint := fmt.Sprintf("%s/internal/shared-links?bucket=%s&fileKey=%s",
+		s.baseURL, url.QueryEscape(bucket), url.QueryEscape(fileKey))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // jsonReader returns a strings.Reader for an inline JSON string.
 func jsonReader(s string) *strings.Reader { return strings.NewReader(s) }
