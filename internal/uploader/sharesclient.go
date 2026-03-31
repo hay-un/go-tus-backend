@@ -423,5 +423,110 @@ func (s *SharesClient) deleteUserByIdentifier(ctx context.Context, identifier st
 	return nil
 }
 
+// SharedLinkRecord is a file-link record returned by go-shares.
+type SharedLinkRecord struct {
+	ID          string    `json:"id"`
+	OwnerUserID string    `json:"ownerUserId"`
+	Bucket      string    `json:"bucket"`
+	FileKey     string    `json:"fileKey"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+// SharedLinksPage is a paginated response from go-shares.
+type SharedLinksPage struct {
+	Data  []SharedLinkRecord `json:"data"`
+	Total int                `json:"total"`
+	Page  int                `json:"page"`
+	Limit int                `json:"limit"`
+}
+
+// CreateSharedLink persists a shared-link record in go-shares.
+// Fire-and-forget: caller should log errors but never block on this.
+func (s *SharesClient) CreateSharedLink(ctx context.Context, ownerUserID, bucket, fileKey string, expiresAt time.Time) error {
+	payload := fmt.Sprintf(
+		`{"ownerUserId":%q,"bucket":%q,"fileKey":%q,"expiresAt":%q}`,
+		ownerUserID, bucket, fileKey, expiresAt.UTC().Format(time.RFC3339),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.baseURL+"/internal/shared-links",
+		jsonReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// ListSharedLinks returns paginated shared-link records for an owner from go-shares.
+func (s *SharesClient) ListSharedLinks(ctx context.Context, ownerUserID string, page, limit int) (*SharedLinksPage, error) {
+	endpoint := fmt.Sprintf("%s/internal/shared-links?ownerUserId=%s&page=%d&limit=%d",
+		s.baseURL, url.QueryEscape(ownerUserID), page, limit)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	var result SharedLinksPage
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Data == nil {
+		result.Data = []SharedLinkRecord{}
+	}
+	return &result, nil
+}
+
+// DeleteSharedLink removes a shared-link record from go-shares.
+func (s *SharesClient) DeleteSharedLink(ctx context.Context, id, ownerUserID string) error {
+	endpoint := fmt.Sprintf("%s/internal/shared-links/%s?ownerUserId=%s",
+		s.baseURL, url.PathEscape(id), url.QueryEscape(ownerUserID))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("shared link not found")
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // jsonReader returns a strings.Reader for an inline JSON string.
 func jsonReader(s string) *strings.Reader { return strings.NewReader(s) }

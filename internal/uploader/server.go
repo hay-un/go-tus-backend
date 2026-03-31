@@ -246,6 +246,19 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Non-TUS: GET /files/shared-links → list shared link history ─────────
+	if r.Method == http.MethodGet && path == "/files/shared-links" && !isTUS {
+		a.ListSharedLinksHandler(w, r)
+		return
+	}
+
+	// ── Non-TUS: DELETE /files/shared-links/{id} → remove shared link record ─
+	if r.Method == http.MethodDelete && strings.HasPrefix(path, "/files/shared-links/") && !isTUS {
+		id := strings.TrimPrefix(path, "/files/shared-links/")
+		a.DeleteSharedLinkHandler(w, r, id)
+		return
+	}
+
 	// Parse path segments after /files/
 	rest := strings.TrimPrefix(path, "/files/")
 	parts := strings.SplitN(rest, "/", 2)

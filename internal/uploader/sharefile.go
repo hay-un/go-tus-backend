@@ -3,11 +3,12 @@ package uploader
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -84,4 +85,15 @@ func (a *App) ShareFileHandler(w http.ResponseWriter, r *http.Request) {
 		"expiresAt": expiresAt.Format(time.RFC3339),
 	})
 	emitAudit(a, r, "file.share", "/files/share?bucket="+bucket+"&file="+file, http.StatusOK)
+
+	// Persist the shared link record for the history dashboard (fire-and-forget).
+	if a.Shares != nil {
+		if claims, ok := ClaimsFromContext(r.Context()); ok {
+			go func() {
+				if err := a.Shares.CreateSharedLink(context.Background(), claims.Subject, bucket, file, expiresAt); err != nil {
+					log.Printf("shares: failed to persist shared link record: %v", err)
+				}
+			}()
+		}
+	}
 }
