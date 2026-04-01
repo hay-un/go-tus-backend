@@ -23,7 +23,7 @@ Module: `github.com/ridho-pratama-putra/go-tus-backend`
 ## Commands
 
 ```bash
-make test                # unit tests (55)
+make test                # unit tests (63)
 make test-coverage       # HTML coverage report
 make test-integration    # needs MinIO + Keycloak running
 go run cmd/server/main.go

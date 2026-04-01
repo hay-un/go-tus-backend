@@ -55,27 +55,39 @@
 			<div id="nav">
 				<select id="files">
 				
-				<option value="file0">music-streaming/backend/internal/uploader/audit.go (67.9%)</option>
+				<option value="file0">music-streaming/backend/internal/uploader/account.go (91.3%)</option>
 				
-				<option value="file1">music-streaming/backend/internal/uploader/auth.go (91.2%)</option>
+				<option value="file1">music-streaming/backend/internal/uploader/audit.go (67.9%)</option>
 				
-				<option value="file2">music-streaming/backend/internal/uploader/bucket.go (66.3%)</option>
+				<option value="file2">music-streaming/backend/internal/uploader/auth.go (90.9%)</option>
 				
-				<option value="file3">music-streaming/backend/internal/uploader/claims.go (50.0%)</option>
+				<option value="file3">music-streaming/backend/internal/uploader/bucket.go (88.9%)</option>
 				
-				<option value="file4">music-streaming/backend/internal/uploader/cors.go (100.0%)</option>
+				<option value="file4">music-streaming/backend/internal/uploader/claims.go (100.0%)</option>
 				
-				<option value="file5">music-streaming/backend/internal/uploader/jwk_rsa.go (0.0%)</option>
+				<option value="file5">music-streaming/backend/internal/uploader/cors.go (100.0%)</option>
 				
-				<option value="file6">music-streaming/backend/internal/uploader/provision.go (83.3%)</option>
+				<option value="file6">music-streaming/backend/internal/uploader/jwk_rsa.go (100.0%)</option>
 				
-				<option value="file7">music-streaming/backend/internal/uploader/server.go (51.0%)</option>
+				<option value="file7">music-streaming/backend/internal/uploader/keycloak.go (81.5%)</option>
 				
-				<option value="file8">music-streaming/backend/internal/uploader/shares.go (0.0%)</option>
+				<option value="file8">music-streaming/backend/internal/uploader/provision.go (93.3%)</option>
 				
-				<option value="file9">music-streaming/backend/internal/uploader/sharesclient.go (0.0%)</option>
+				<option value="file9">music-streaming/backend/internal/uploader/purge.go (87.5%)</option>
 				
-				<option value="file10">music-streaming/backend/internal/uploader/stream.go (93.1%)</option>
+				<option value="file10">music-streaming/backend/internal/uploader/server.go (73.2%)</option>
+				
+				<option value="file11">music-streaming/backend/internal/uploader/sharedlinks.go (88.0%)</option>
+				
+				<option value="file12">music-streaming/backend/internal/uploader/sharefile.go (82.1%)</option>
+				
+				<option value="file13">music-streaming/backend/internal/uploader/shares.go (91.9%)</option>
+				
+				<option value="file14">music-streaming/backend/internal/uploader/sharesclient.go (84.9%)</option>
+				
+				<option value="file15">music-streaming/backend/internal/uploader/stream.go (93.1%)</option>
+				
+				<option value="file16">music-streaming/backend/internal/uploader/vault.go (86.7%)</option>
 				
 				</select>
 			</div>
@@ -99,6 +111,136 @@
 		<div id="content">
 		
 		<pre class="file" id="file0" style="display: none">package uploader
+
+import (
+        "context"
+        "log"
+        "net/http"
+
+        "github.com/aws/aws-sdk-go-v2/aws"
+        "github.com/aws/aws-sdk-go-v2/service/s3"
+        "github.com/aws/aws-sdk-go-v2/service/s3/types"
+)
+
+// DeleteAccountHandler handles DELETE /users/me.
+// It permanently deletes the authenticated user's account:
+//  1. Hard-deletes all owned MinIO buckets and their contents
+//  2. Removes all share records (owner-side and sharee-side) via go-shares
+//  3. Deletes the Keycloak user account
+//  4. Emits an account.delete audit event
+//
+// Deletion is best-effort: each step logs failures but continues so that a transient
+// downstream error never leaves the user in a half-deleted state that they cannot retry.
+// Data deletion takes priority — Keycloak is deleted last.
+func (a *App) DeleteAccountHandler(w http.ResponseWriter, r *http.Request) <span class="cov8" title="12">{
+        if r.Method != http.MethodDelete </span><span class="cov1" title="1">{
+                jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="11">claims, hasClaims := ClaimsFromContext(r.Context())
+        if !hasClaims || claims == nil </span><span class="cov1" title="1">{
+                jsonError(w, "authentication required", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov7" title="10">ctx := r.Context()
+
+        // Step 1: Hard-delete all owned MinIO buckets.
+        // AllowedBuckets may be stale — sub-buckets created after the last token refresh
+        // are not yet in the JWT. We augment with a live MinIO scan so that orphaned
+        // sub-buckets (e.g. parent--child created seconds before account delete) are
+        // also cleaned up.
+        bucketsToDelete := make(map[string]struct{})
+        for _, b := range claims.AllowedBuckets </span><span class="cov9" title="17">{
+                if b != "*" </span><span class="cov9" title="16">{
+                        bucketsToDelete[b] = struct{}{}
+                }</span>
+        }
+
+        <span class="cov7" title="10">if claims.Role != "admin" </span><span class="cov7" title="9">{ // admin wildcard matches every bucket — skip scan to avoid wiping all of MinIO
+                listOut, listErr := a.S3Client.ListBuckets(ctx, &amp;s3.ListBucketsInput{})
+                if listErr != nil </span><span class="cov1" title="1">{
+                        log.Printf("account delete: ListBuckets for stale-JWT discovery: %v (JWT-only fallback)", listErr)
+                }</span> else<span class="cov7" title="8"> {
+                        for _, b := range listOut.Buckets </span><span class="cov8" title="14">{
+                                if name := aws.ToString(b.Name); name != "" &amp;&amp; claims.OwnsBucket(name) </span><span class="cov8" title="14">{
+                                        bucketsToDelete[name] = struct{}{}
+                                }</span>
+                        }
+                }
+        }
+
+        // NOTE: v1 known limit — DeleteObjects handles up to 1000 objects per bucket.
+        <span class="cov7" title="10">for bucket := range bucketsToDelete </span><span class="cov9" title="17">{
+                if err := a.hardDeleteBucket(ctx, bucket); err != nil </span><span class="cov1" title="1">{
+                        log.Printf("account delete: MinIO bucket %q: %v", bucket, err)
+                }</span>
+        }
+
+        // Step 1.5: Crypto-shred — delete the user's Vault encryption key (GDPR Art. 17).
+        // This makes any remaining encrypted data permanently inaccessible, even if
+        // the MinIO deletion above failed for some objects.
+        <span class="cov7" title="10">if a.VaultClient != nil </span><span class="cov0" title="0">{
+                if err := a.VaultClient.DeleteKey(ctx, claims.Subject); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("account delete: Vault key for %s: %v", claims.Subject, err)
+                }</span>
+        }
+
+        // Step 2: Remove all share records (best-effort).
+        <span class="cov7" title="10">if a.Shares != nil </span><span class="cov3" title="2">{
+                a.Shares.DeleteUserShares(ctx, claims.Subject, claims.Email)
+        }</span>
+
+        // Step 3: Delete Keycloak account (best-effort — data is already gone).
+        <span class="cov7" title="10">if a.KeycloakGranter != nil </span><span class="cov3" title="2">{
+                if err := a.KeycloakGranter.DeleteUser(ctx, claims.Subject); err != nil </span><span class="cov1" title="1">{
+                        log.Printf("account delete: Keycloak user %s: %v", claims.Subject, err)
+                }</span>
+        }
+
+        // Step 4: Audit.
+        <span class="cov7" title="10">emitAudit(a, r, "account.delete", "/users/me", http.StatusNoContent)
+
+        w.WriteHeader(http.StatusNoContent)</span>
+}
+
+// hardDeleteBucket removes all objects inside a bucket and then deletes the bucket itself.
+// It is a no-op if the bucket does not exist.
+func (a *App) hardDeleteBucket(ctx context.Context, name string) error <span class="cov10" title="20">{
+        listOut, err := a.S3Client.ListObjectsV2(ctx, &amp;s3.ListObjectsV2Input{
+                Bucket: aws.String(name),
+        })
+        if err != nil </span><span class="cov3" title="2">{
+                if isBucketNotFound(err) </span><span class="cov1" title="1">{
+                        return nil
+                }</span>
+                <span class="cov1" title="1">return err</span>
+        }
+
+        <span class="cov9" title="18">if len(listOut.Contents) &gt; 0 </span><span class="cov4" title="3">{
+                objectIDs := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
+                for _, obj := range listOut.Contents </span><span class="cov5" title="4">{
+                        objectIDs = append(objectIDs, types.ObjectIdentifier{Key: obj.Key})
+                }</span>
+                <span class="cov4" title="3">if _, err := a.S3Client.DeleteObjects(ctx, &amp;s3.DeleteObjectsInput{
+                        Bucket: aws.String(name),
+                        Delete: &amp;types.Delete{Objects: objectIDs},
+                }); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+
+        <span class="cov9" title="18">if _, err := a.S3Client.DeleteBucket(ctx, &amp;s3.DeleteBucketInput{
+                Bucket: aws.String(name),
+        }); err != nil &amp;&amp; !isBucketNotFound(err) </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov9" title="18">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package uploader
 
 import (
         "context"
@@ -159,17 +301,17 @@ func NewKafkaAuditProducer(brokers []string, topic string) *KafkaAuditProducer <
 
 // NewKafkaAuditProducerWithWriter creates a KafkaAuditProducer with a custom KafkaWriter.
 // Intended for use in tests to inject a mock writer.
-func NewKafkaAuditProducerWithWriter(w KafkaWriter) *KafkaAuditProducer <span class="cov4" title="3">{
+func NewKafkaAuditProducerWithWriter(w KafkaWriter) *KafkaAuditProducer <span class="cov3" title="3">{
         return &amp;KafkaAuditProducer{writer: w}
 }</span>
 
 // Emit serialises event to JSON and writes it to Kafka.
-func (p *KafkaAuditProducer) Emit(ctx context.Context, event AuditEvent) error <span class="cov4" title="3">{
+func (p *KafkaAuditProducer) Emit(ctx context.Context, event AuditEvent) error <span class="cov3" title="3">{
         payload, err := json.Marshal(event)
         if err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
-        <span class="cov4" title="3">return p.writer.WriteMessages(ctx, kafka.Message{Value: payload})</span>
+        <span class="cov3" title="3">return p.writer.WriteMessages(ctx, kafka.Message{Value: payload})</span>
 }
 
 // Close closes the underlying Kafka writer.
@@ -183,7 +325,7 @@ func (p *KafkaAuditProducer) Close() error <span class="cov0" title="0">{
 type NoopAuditProducer struct{}
 
 // Emit is a no-op; it always returns nil.
-func (p *NoopAuditProducer) Emit(_ context.Context, _ AuditEvent) error <span class="cov10" title="21">{ return nil }</span>
+func (p *NoopAuditProducer) Emit(_ context.Context, _ AuditEvent) error <span class="cov10" title="59">{ return nil }</span>
 
 // Close is a no-op.
 func (p *NoopAuditProducer) Close() error <span class="cov1" title="1">{ return nil }</span>
@@ -192,7 +334,7 @@ func (p *NoopAuditProducer) Close() error <span class="cov1" title="1">{ return 
 
 // emitAudit fires an audit event in a background goroutine so the HTTP handler
 // never blocks on Kafka. Log errors rather than propagating them to the client.
-func emitAudit(a *App, r *http.Request, action, resource string, status int) <span class="cov10" title="21">{
+func emitAudit(a *App, r *http.Request, action, resource string, status int) <span class="cov9" title="56">{
         claims, _ := ClaimsFromContext(r.Context())
         event := AuditEvent{
                 Action:    action,
@@ -203,12 +345,12 @@ func emitAudit(a *App, r *http.Request, action, resource string, status int) <sp
                 IPAddress: realIP(r),
                 Timestamp: time.Now().UTC(),
         }
-        if claims != nil </span><span class="cov5" title="5">{
+        if claims != nil </span><span class="cov8" title="36">{
                 event.UserID = claims.Subject
                 event.UserEmail = claims.Email
         }</span>
 
-        <span class="cov10" title="21">go func() </span><span class="cov10" title="21">{
+        <span class="cov9" title="56">go func() </span><span class="cov9" title="56">{
                 if err := a.Audit.Emit(context.Background(), event); err != nil </span><span class="cov0" title="0">{
                         log.Printf("audit emit error [%s %s]: %v", action, resource, err)
                 }</span>
@@ -216,11 +358,11 @@ func emitAudit(a *App, r *http.Request, action, resource string, status int) <sp
 }
 
 // realIP extracts the client IP from the request, preferring X-Real-IP / X-Forwarded-For.
-func realIP(r *http.Request) string <span class="cov10" title="21">{
+func realIP(r *http.Request) string <span class="cov9" title="56">{
         if ip := r.Header.Get("X-Real-IP"); ip != "" </span><span class="cov0" title="0">{
                 return ip
         }</span>
-        <span class="cov10" title="21">if ip := r.Header.Get("X-Forwarded-For"); ip != "" </span><span class="cov0" title="0">{
+        <span class="cov9" title="56">if ip := r.Header.Get("X-Forwarded-For"); ip != "" </span><span class="cov0" title="0">{
                 // May be a comma-separated list; take the first entry.
                 for i := 0; i &lt; len(ip); i++ </span><span class="cov0" title="0">{
                         if ip[i] == ',' </span><span class="cov0" title="0">{
@@ -229,15 +371,15 @@ func realIP(r *http.Request) string <span class="cov10" title="21">{
                 }
                 <span class="cov0" title="0">return ip</span>
         }
-        <span class="cov10" title="21">host, _, err := net.SplitHostPort(r.RemoteAddr)
-        if err != nil </span><span class="cov9" title="20">{
+        <span class="cov9" title="56">host, _, err := net.SplitHostPort(r.RemoteAddr)
+        if err != nil </span><span class="cov9" title="44">{
                 return r.RemoteAddr
         }</span>
-        <span class="cov1" title="1">return host</span>
+        <span class="cov6" title="12">return host</span>
 }
 </pre>
 		
-		<pre class="file" id="file1" style="display: none">package uploader
+		<pre class="file" id="file2" style="display: none">package uploader
 
 import (
         "context"
@@ -267,7 +409,11 @@ type keycloakClaims struct {
 //
 // Dev-mode bypass: if issuer is empty the middleware is a no-op and injects
 // admin Claims so all handlers continue to work without Keycloak running.
-func NewJWTMiddleware(issuer string, next http.Handler) http.Handler <span class="cov10" title="6">{
+// NewJWTMiddleware returns an HTTP middleware that validates Keycloak RS256 JWTs.
+// issuer is the public-facing OIDC issuer URL used to validate the JWT "iss" claim.
+// jwksURL is the endpoint to fetch signing keys — use the internal Docker URL to avoid
+// HTTPS cert requirements inside containers (e.g. http://keycloak:8080/.../certs).
+func NewJWTMiddleware(issuer, jwksURL string, next http.Handler) http.Handler <span class="cov10" title="6">{
         if issuer == "" </span><span class="cov1" title="1">{
                 // Dev-mode: bypass auth, inject wildcard claims so handlers work.
                 return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov1" title="1">{
@@ -282,9 +428,7 @@ func NewJWTMiddleware(issuer string, next http.Handler) http.Handler <span class
                 }</span>)
         }
 
-        <span class="cov9" title="5">jwksURL := issuer + "/protocol/openid-connect/certs"
-
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov9" title="5">{
+        <span class="cov9" title="5">return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov9" title="5">{
                 raw := extractToken(r)
                 if raw == "" </span><span class="cov1" title="1">{
                         jsonError(w, "missing or malformed authorization token", http.StatusUnauthorized)
@@ -343,12 +487,14 @@ func validateToken(ctx context.Context, rawToken, jwksURL, issuer string) (*Clai
 }
 </pre>
 		
-		<pre class="file" id="file2" style="display: none">package uploader
+		<pre class="file" id="file3" style="display: none">package uploader
 
 import (
+        "context"
         "encoding/json"
         "errors"
         "fmt"
+        "log"
         "net/http"
         "strings"
         "time"
@@ -359,14 +505,14 @@ import (
 )
 
 // jsonError writes a JSON error response.
-func jsonError(w http.ResponseWriter, message string, code int) <span class="cov10" title="26">{
+func jsonError(w http.ResponseWriter, message string, code int) <span class="cov10" title="108">{
         w.Header().Set("Content-Type", "application/json")
         w.WriteHeader(code)
         json.NewEncoder(w).Encode(map[string]string{"error": message})
 }</span>
 
 // isBucketNotFound checks whether an S3 error indicates a missing bucket.
-func isBucketNotFound(err error) bool <span class="cov5" title="6">{
+func isBucketNotFound(err error) bool <span class="cov7" title="30">{
         var nf *types.NoSuchBucket
         var notFound *types.NotFound
         return errors.As(err, &amp;nf) || errors.As(err, &amp;notFound)
@@ -374,73 +520,94 @@ func isBucketNotFound(err error) bool <span class="cov5" title="6">{
 
 // bucketExists probes a bucket with HeadBucket.
 // Returns (true, nil) if it exists, (false, nil) if not found, (false, err) on other errors.
-func (a *App) bucketExists(r *http.Request, name string) (bool, error) <span class="cov7" title="11">{
+func (a *App) bucketExists(r *http.Request, name string) (bool, error) <span class="cov8" title="46">{
         _, err := a.S3Client.HeadBucket(r.Context(), &amp;s3.HeadBucketInput{
                 Bucket: aws.String(name),
         })
-        if err == nil </span><span class="cov5" title="6">{
+        if err == nil </span><span class="cov6" title="22">{
                 return true, nil
         }</span>
-        <span class="cov5" title="5">if isBucketNotFound(err) </span><span class="cov5" title="5">{
+        <span class="cov7" title="24">if isBucketNotFound(err) </span><span class="cov6" title="21">{
                 return false, nil
         }</span>
-        <span class="cov0" title="0">return false, err</span>
+        <span class="cov3" title="3">return false, err</span>
 }
 
 // BucketsHandler dispatches GET and POST on /buckets.
-func (a *App) BucketsHandler(w http.ResponseWriter, r *http.Request) <span class="cov5" title="6">{
+func (a *App) BucketsHandler(w http.ResponseWriter, r *http.Request) <span class="cov6" title="16">{
         switch r.Method </span>{
-        case http.MethodGet:<span class="cov2" title="2">
+        case http.MethodGet:<span class="cov3" title="3">
                 a.ListBucketsHandler(w, r)</span>
-        case http.MethodPost:<span class="cov4" title="4">
+        case http.MethodPost:<span class="cov5" title="12">
                 a.CreateBucketHandler(w, r)</span>
-        default:<span class="cov0" title="0">
+        default:<span class="cov1" title="1">
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)</span>
         }
 }
 
 // BucketItemHandler dispatches on /buckets/{name}, /buckets/{name}/rename,
-// and /buckets/{name}/shares[/{sharee}].
-func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) <span class="cov6" title="7">{
+// /buckets/{name}/restore, /buckets/trash, and /buckets/{name}/shares[/{sharee}].
+func (a *App) BucketItemHandler(w http.ResponseWriter, r *http.Request) <span class="cov7" title="31">{
         // Strip the "/buckets/" prefix
         rest := strings.TrimPrefix(r.URL.Path, "/buckets/")
 
-        if strings.HasSuffix(rest, "/rename") </span><span class="cov4" title="4">{
-                name := strings.TrimSuffix(rest, "/rename")
-                if r.Method != http.MethodPost </span><span class="cov0" title="0">{
+        // GET /buckets/trash → list trashed buckets
+        if rest == "trash" || rest == "trash/" </span><span class="cov2" title="2">{
+                if r.Method != http.MethodGet </span><span class="cov1" title="1">{
                         http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
                         return
                 }</span>
-                <span class="cov4" title="4">a.renameBucketHandler(w, r, name)
+                <span class="cov1" title="1">a.ListBucketTrashHandler(w, r)
+                return</span>
+        }
+
+        <span class="cov7" title="29">if strings.HasSuffix(rest, "/rename") </span><span class="cov6" title="14">{
+                name := strings.TrimSuffix(rest, "/rename")
+                if r.Method != http.MethodPost </span><span class="cov1" title="1">{
+                        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+                        return
+                }</span>
+                <span class="cov5" title="13">a.renameBucketHandler(w, r, name)
+                return</span>
+        }
+
+        // POST /buckets/{name}/restore
+        <span class="cov6" title="15">if strings.HasSuffix(rest, "/restore") </span><span class="cov2" title="2">{
+                name := strings.TrimSuffix(rest, "/restore")
+                if r.Method != http.MethodPost </span><span class="cov1" title="1">{
+                        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+                        return
+                }</span>
+                <span class="cov1" title="1">a.RestoreBucketHandler(w, r, name)
                 return</span>
         }
 
         // /buckets/{name}/shares[/{sharee}]
-        <span class="cov4" title="3">if strings.Contains(rest, "/shares") </span><span class="cov0" title="0">{
+        <span class="cov5" title="13">if strings.Contains(rest, "/shares") </span><span class="cov1" title="1">{
                 a.SharesItemHandler(w, r)
                 return
         }</span>
 
         // /buckets/{name}
-        <span class="cov4" title="3">name := strings.TrimSuffix(rest, "/")
+        <span class="cov5" title="12">name := strings.TrimSuffix(rest, "/")
         switch r.Method </span>{
-        case http.MethodDelete:<span class="cov4" title="3">
+        case http.MethodDelete:<span class="cov5" title="11">
                 a.deleteBucketHandler(w, r, name)</span>
-        default:<span class="cov0" title="0">
+        default:<span class="cov1" title="1">
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)</span>
         }
 }
 
 // ListBucketsHandler handles GET /buckets.
 // Returns personal buckets (via JWT allowedBuckets) plus buckets shared with the user (via go-shares).
-func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) <span class="cov2" title="2">{
+func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) <span class="cov4" title="5">{
         output, err := a.S3Client.ListBuckets(r.Context(), &amp;s3.ListBucketsInput{})
         if err != nil </span><span class="cov0" title="0">{
                 jsonError(w, fmt.Sprintf("failed to list buckets: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov2" title="2">type BucketInfo struct {
+        <span class="cov4" title="5">type BucketInfo struct {
                 Name      string    `json:"name"`
                 CreatedAt time.Time `json:"created_at"`
                 Shared    bool      `json:"shared,omitempty"` // true when bucket belongs to another user
@@ -450,93 +617,156 @@ func (a *App) ListBucketsHandler(w http.ResponseWriter, r *http.Request) <span c
 
         // Build MinIO bucket index for fast CreatedAt lookup.
         minioBuckets := make(map[string]time.Time, len(output.Buckets))
-        for _, b := range output.Buckets </span><span class="cov4" title="4">{
+        for _, b := range output.Buckets </span><span class="cov5" title="10">{
                 name := aws.ToString(b.Name)
-                if b.CreationDate != nil </span><span class="cov4" title="4">{
+                if b.CreationDate != nil </span><span class="cov5" title="10">{
                         minioBuckets[name] = *b.CreationDate
                 }</span>
         }
 
-        <span class="cov2" title="2">buckets := make([]BucketInfo, 0)
+        // Build set of trashed bucket names to exclude from listing.
+        <span class="cov4" title="5">trashedSet := make(map[string]bool)
+        if a.Shares != nil &amp;&amp; hasClaims &amp;&amp; claims.Subject != "" </span><span class="cov2" title="2">{
+                trashed, err := a.Shares.GetTrashedBuckets(r.Context(), claims.Subject)
+                if err == nil </span><span class="cov2" title="2">{
+                        for _, t := range trashed </span><span class="cov1" title="1">{
+                                if bn, ok := t["bucketName"].(string); ok </span><span class="cov1" title="1">{
+                                        trashedSet[bn] = true
+                                }</span>
+                        }
+                }
+        }
+
+        <span class="cov4" title="5">buckets := make([]BucketInfo, 0)
 
         // ── Personal buckets (JWT allowedBuckets) ────────────────────────────────
-        for _, b := range output.Buckets </span><span class="cov4" title="4">{
+        for _, b := range output.Buckets </span><span class="cov5" title="10">{
                 name := aws.ToString(b.Name)
-                if hasClaims &amp;&amp; !claims.CanAccessBucket(name) </span><span class="cov1" title="1">{
+                if hasClaims &amp;&amp; !claims.CanAccessBucket(name) </span><span class="cov2" title="2">{
                         continue</span>
                 }
-                <span class="cov4" title="3">info := BucketInfo{Name: name}
-                if b.CreationDate != nil </span><span class="cov4" title="3">{
+                <span class="cov4" title="8">if trashedSet[name] </span><span class="cov1" title="1">{
+                        continue</span> // bucket is in trash — exclude from listing
+                }
+                <span class="cov4" title="7">info := BucketInfo{Name: name}
+                if b.CreationDate != nil </span><span class="cov4" title="7">{
                         info.CreatedAt = *b.CreationDate
                 }</span>
-                <span class="cov4" title="3">buckets = append(buckets, info)</span>
+                <span class="cov4" title="7">buckets = append(buckets, info)</span>
         }
 
         // ── Shared buckets (go-shares) ────────────────────────────────────────────
-        <span class="cov2" title="2">if a.Shares != nil &amp;&amp; hasClaims &amp;&amp; claims.Email != "" </span><span class="cov0" title="0">{
+        <span class="cov4" title="5">if a.Shares != nil &amp;&amp; hasClaims &amp;&amp; claims.Email != "" </span><span class="cov2" title="2">{
                 sharedEntries, err := a.Shares.GetSharedBuckets(r.Context(), claims.Email)
-                if err == nil </span><span class="cov0" title="0">{
+                if err == nil </span><span class="cov2" title="2">{
                         included := make(map[string]bool, len(buckets))
-                        for _, b := range buckets </span><span class="cov0" title="0">{
+                        for _, b := range buckets </span><span class="cov2" title="2">{
                                 included[b.Name] = true
                         }</span>
-                        <span class="cov0" title="0">for _, entry := range sharedEntries </span><span class="cov0" title="0">{
+                        <span class="cov2" title="2">for _, entry := range sharedEntries </span><span class="cov1" title="1">{
                                 bucketName, _ := entry["ownerBucket"].(string)
                                 if bucketName == "" || included[bucketName] </span><span class="cov0" title="0">{
                                         continue</span>
                                 }
-                                <span class="cov0" title="0">info := BucketInfo{Name: bucketName, Shared: true, CreatedAt: minioBuckets[bucketName]}
+                                <span class="cov1" title="1">info := BucketInfo{Name: bucketName, Shared: true, CreatedAt: minioBuckets[bucketName]}
                                 buckets = append(buckets, info)
                                 included[bucketName] = true</span>
                         }
                 }
         }
 
-        <span class="cov2" title="2">w.Header().Set("Content-Type", "application/json")
+        <span class="cov4" title="5">w.Header().Set("Content-Type", "application/json")
         json.NewEncoder(w).Encode(buckets) //nolint:errcheck
         emitAudit(a, r, "bucket.list", "/buckets", http.StatusOK)</span>
 }
 
 // CreateBucketHandler handles POST /buckets.
+// Top-level bucket creation requires admin role.
+// Sub-bucket creation (parent field provided) requires the caller to own the parent bucket.
+// Sub-buckets are stored as MinIO buckets named "{parent}--{name}".
 // Returns 409 if a bucket with the same name already exists.
-// Requires admin role.
-func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) <span class="cov4" title="4">{
-        if claims, ok := ClaimsFromContext(r.Context()); ok &amp;&amp; claims.Role != "admin" </span><span class="cov1" title="1">{
-                jsonError(w, "admin role required to create buckets", http.StatusForbidden)
-                return
-        }</span>
-
-        <span class="cov4" title="3">var body struct {
-                Name string `json:"name"`
+func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) <span class="cov5" title="12">{
+        var body struct {
+                Name   string `json:"name"`
+                Parent string `json:"parent"` // optional; when set, creates a sub-bucket inside parent
         }
         if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
                 jsonError(w, "invalid JSON body", http.StatusBadRequest)
                 return
         }</span>
-        <span class="cov4" title="3">if strings.TrimSpace(body.Name) == "" </span><span class="cov1" title="1">{
+
+        <span class="cov5" title="12">claims, hasClaims := ClaimsFromContext(r.Context())
+
+        if body.Parent != "" </span><span class="cov4" title="6">{
+                // Sub-bucket: caller must own the parent bucket
+                if !hasClaims </span><span class="cov1" title="1">{
+                        jsonError(w, "authentication required to create sub-buckets", http.StatusUnauthorized)
+                        return
+                }</span>
+                <span class="cov4" title="5">if !claims.OwnsBucket(body.Parent) </span><span class="cov3" title="3">{
+                        // Fallback: JWT may be stale right after first-login provisioning.
+                        // Allow if parent is the user's expected default bucket and exists in MinIO.
+                        if !isHomeBucket(claims.Email, body.Parent) </span><span class="cov2" title="2">{
+                                jsonError(w, "you do not own the parent bucket", http.StatusForbidden)
+                                return
+                        }</span>
+                        <span class="cov1" title="1">exists, err := a.bucketExists(r, body.Parent)
+                        if err != nil || !exists </span><span class="cov0" title="0">{
+                                jsonError(w, "you do not own the parent bucket", http.StatusForbidden)
+                                return
+                        }</span>
+                }
+                // Full MinIO bucket name: "{parent}--{child}"
+                <span class="cov3" title="3">body.Name = body.Parent + "--" + body.Name</span>
+        } else<span class="cov4" title="6"> {
+                // Top-level bucket: requires admin role
+                if hasClaims &amp;&amp; claims.Role != "admin" </span><span class="cov1" title="1">{
+                        jsonError(w, "admin role required to create buckets", http.StatusForbidden)
+                        return
+                }</span>
+        }
+
+        <span class="cov4" title="8">if strings.TrimSpace(body.Name) == "" </span><span class="cov1" title="1">{
                 jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
                 return
         }</span>
 
         // Duplicate check
-        <span class="cov2" title="2">exists, err := a.bucketExists(r, body.Name)
+        <span class="cov4" title="7">exists, err := a.bucketExists(r, body.Name)
         if err != nil </span><span class="cov0" title="0">{
                 jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
-        <span class="cov2" title="2">if exists </span><span class="cov1" title="1">{
+        <span class="cov4" title="7">if exists </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("bucket %q already exists", body.Name), http.StatusConflict)
                 return
         }</span>
 
-        <span class="cov1" title="1">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
+        <span class="cov4" title="6">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
                 Bucket: aws.String(body.Name),
-        }); err != nil </span><span class="cov0" title="0">{
+        }); err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        // Set MinIO lifecycle rule for __trash__/ prefix auto-expiry.
+        <span class="cov4" title="5">if a.TrashRetentionDays &gt; 0 </span><span class="cov0" title="0">{
+                a.setTrashLifecycleRule(r.Context(), body.Name)
+        }</span>
+
+        // Set per-user SSE-KMS encryption on sub-buckets (best-effort, non-fatal).
+        // Requires VaultClient to be configured and claims to carry a Subject (Keycloak sub UUID).
+        // For top-level buckets (admin-created), Subject is the admin's — skip per-user key isolation.
+        <span class="cov4" title="5">if body.Parent != "" &amp;&amp; a.VaultClient != nil &amp;&amp; hasClaims &amp;&amp; claims.Subject != "" </span><span class="cov0" title="0">{
+                a.provisionSSEKey(r.Context(), body.Name, claims.Subject)
+        }</span>
+
+        // Grant the new sub-bucket in Keycloak so it appears in the user's JWT on next token refresh.
+        <span class="cov4" title="5">if body.Parent != "" &amp;&amp; a.KeycloakGranter != nil &amp;&amp; hasClaims &amp;&amp; claims.Email != "" </span><span class="cov1" title="1">{
+                _ = a.KeycloakGranter.GrantBucket(r.Context(), claims.Email, body.Name)
+        }</span>
+
+        <span class="cov4" title="5">w.Header().Set("Content-Type", "application/json")
         w.WriteHeader(http.StatusCreated)
         json.NewEncoder(w).Encode(struct { //nolint:errcheck
                 Name      string    `json:"name"`
@@ -546,180 +776,326 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) <span 
 }
 
 // deleteBucketHandler handles DELETE /buckets/{name}.
-// It cascade-deletes all objects inside before removing the bucket.
-// Requires admin role.
-func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name string) <span class="cov4" title="3">{
-        if claims, ok := ClaimsFromContext(r.Context()); ok &amp;&amp; claims.Role != "admin" </span><span class="cov1" title="1">{
-                jsonError(w, "admin role required to delete buckets", http.StatusForbidden)
+// When go-shares is configured, performs a soft delete (moves bucket to trash).
+// Falls back to hard delete (MinIO + shares cascade) when go-shares is not configured.
+// Requires the caller to own the bucket (explicit allowedBuckets entry or admin role).
+func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name string) <span class="cov6" title="16">{
+        claims, hasClaims := ClaimsFromContext(r.Context())
+        if hasClaims &amp;&amp; !claims.OwnsBucket(name) </span><span class="cov1" title="1">{
+                jsonError(w, "you do not own this bucket", http.StatusForbidden)
                 return
         }</span>
 
-        <span class="cov2" title="2">if name == "" </span><span class="cov0" title="0">{
+        <span class="cov6" title="15">if name == "" </span><span class="cov0" title="0">{
                 jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
                 return
         }</span>
 
-        // Verify bucket exists
-        <span class="cov2" title="2">exists, err := a.bucketExists(r, name)
-        if err != nil </span><span class="cov0" title="0">{
+        // ── Soft delete (go-shares configured) ───────────────────────────────────
+        <span class="cov6" title="15">if a.Shares != nil </span><span class="cov4" title="8">{
+                if !hasClaims </span><span class="cov2" title="2">{
+                        jsonError(w, "authentication required to delete buckets", http.StatusUnauthorized)
+                        return
+                }</span>
+
+                <span class="cov4" title="6">exists, err := a.bucketExists(r, name)
+                if err != nil </span><span class="cov1" title="1">{
+                        jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
+                        return
+                }</span>
+                <span class="cov4" title="5">if !exists </span><span class="cov1" title="1">{
+                        jsonError(w, fmt.Sprintf("bucket %q not found", name), http.StatusNotFound)
+                        return
+                }</span>
+
+                <span class="cov3" title="4">if err := a.Shares.TrashBucket(r.Context(), name, claims.Subject, a.TrashRetentionDays); err != nil </span><span class="cov2" title="2">{
+                        if strings.Contains(err.Error(), "already in trash") </span><span class="cov1" title="1">{
+                                jsonError(w, "bucket is already in trash", http.StatusConflict)
+                                return
+                        }</span>
+                        <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to trash bucket: %v", err), http.StatusInternalServerError)
+                        return</span>
+                }
+
+                <span class="cov2" title="2">w.WriteHeader(http.StatusNoContent)
+                emitAudit(a, r, "bucket.trash", "/buckets/"+name, http.StatusNoContent)
+                return</span>
+        }
+
+        // ── Hard delete fallback (go-shares not configured) ───────────────────────
+        <span class="cov4" title="7">exists, err := a.bucketExists(r, name)
+        if err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
-        <span class="cov2" title="2">if !exists </span><span class="cov1" title="1">{
+        <span class="cov4" title="6">if !exists </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("bucket %q not found", name), http.StatusNotFound)
                 return
         }</span>
 
         // List and delete all objects (S3 requires empty bucket before deletion)
-        <span class="cov1" title="1">listOut, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+        <span class="cov4" title="5">listOut, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
                 Bucket: aws.String(name),
         })
-        if err != nil </span><span class="cov0" title="0">{
+        if err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to list objects: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov1" title="1">if len(listOut.Contents) &gt; 0 </span><span class="cov1" title="1">{
+        <span class="cov3" title="4">if len(listOut.Contents) &gt; 0 </span><span class="cov2" title="2">{
                 objectIds := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
-                for _, obj := range listOut.Contents </span><span class="cov2" title="2">{
+                for _, obj := range listOut.Contents </span><span class="cov3" title="3">{
                         objectIds = append(objectIds, types.ObjectIdentifier{Key: obj.Key})
                 }</span>
-                <span class="cov1" title="1">if _, err := a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
+                <span class="cov2" title="2">if _, err := a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
                         Bucket: aws.String(name),
                         Delete: &amp;types.Delete{Objects: objectIds},
-                }); err != nil </span><span class="cov0" title="0">{
+                }); err != nil </span><span class="cov1" title="1">{
                         jsonError(w, fmt.Sprintf("failed to delete objects: %v", err), http.StatusInternalServerError)
                         return
                 }</span>
         }
 
-        <span class="cov1" title="1">if _, err := a.S3Client.DeleteBucket(r.Context(), &amp;s3.DeleteBucketInput{
+        <span class="cov3" title="3">if _, err := a.S3Client.DeleteBucket(r.Context(), &amp;s3.DeleteBucketInput{
                 Bucket: aws.String(name),
-        }); err != nil </span><span class="cov0" title="0">{
+        }); err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to delete bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov1" title="1">w.WriteHeader(http.StatusNoContent)
+        <span class="cov2" title="2">w.WriteHeader(http.StatusNoContent)
         emitAudit(a, r, "bucket.delete", "/buckets/"+name, http.StatusNoContent)</span>
 }
 
 // renameBucketHandler handles POST /buckets/{name}/rename.
 // S3 has no native rename, so we: create new → copy all objects → delete old.
 // Returns 409 if the new name is already taken.
-// Requires admin role.
-func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldName string) <span class="cov4" title="4">{
-        if claims, ok := ClaimsFromContext(r.Context()); ok &amp;&amp; claims.Role != "admin" </span><span class="cov1" title="1">{
-                jsonError(w, "admin role required to rename buckets", http.StatusForbidden)
+// Requires the caller to own the bucket (explicit allowedBuckets entry or admin role).
+func (a *App) renameBucketHandler(w http.ResponseWriter, r *http.Request, oldName string) <span class="cov5" title="13">{
+        if claims, ok := ClaimsFromContext(r.Context()); ok &amp;&amp; !claims.OwnsBucket(oldName) </span><span class="cov1" title="1">{
+                jsonError(w, "you do not own this bucket", http.StatusForbidden)
                 return
         }</span>
 
-        <span class="cov4" title="3">if oldName == "" </span><span class="cov0" title="0">{
+        <span class="cov5" title="12">if oldName == "" </span><span class="cov0" title="0">{
                 jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
                 return
         }</span>
 
-        <span class="cov4" title="3">var body struct {
+        <span class="cov5" title="12">var body struct {
                 NewName string `json:"new_name"`
         }
-        if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
+        if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov1" title="1">{
                 jsonError(w, "invalid JSON body", http.StatusBadRequest)
                 return
         }</span>
-        <span class="cov4" title="3">if strings.TrimSpace(body.NewName) == "" </span><span class="cov1" title="1">{
+        <span class="cov5" title="11">if strings.TrimSpace(body.NewName) == "" </span><span class="cov1" title="1">{
                 jsonError(w, "new_name must not be empty", http.StatusBadRequest)
                 return
         }</span>
-        <span class="cov2" title="2">if oldName == body.NewName </span><span class="cov0" title="0">{
+        <span class="cov5" title="10">if oldName == body.NewName </span><span class="cov1" title="1">{
                 jsonError(w, "new_name must differ from current name", http.StatusBadRequest)
                 return
         }</span>
 
         // Check old bucket exists
-        <span class="cov2" title="2">oldExists, err := a.bucketExists(r, oldName)
+        <span class="cov5" title="9">oldExists, err := a.bucketExists(r, oldName)
         if err != nil </span><span class="cov0" title="0">{
                 jsonError(w, fmt.Sprintf("failed to check source bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
-        <span class="cov2" title="2">if !oldExists </span><span class="cov0" title="0">{
+        <span class="cov5" title="9">if !oldExists </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("bucket %q not found", oldName), http.StatusNotFound)
                 return
         }</span>
 
         // Check new name is not already taken (duplicate guard)
-        <span class="cov2" title="2">newExists, err := a.bucketExists(r, body.NewName)
+        <span class="cov4" title="8">newExists, err := a.bucketExists(r, body.NewName)
         if err != nil </span><span class="cov0" title="0">{
                 jsonError(w, fmt.Sprintf("failed to check destination bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
-        <span class="cov2" title="2">if newExists </span><span class="cov1" title="1">{
+        <span class="cov4" title="8">if newExists </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("bucket %q already exists", body.NewName), http.StatusConflict)
                 return
         }</span>
 
         // Create new bucket
-        <span class="cov1" title="1">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
+        <span class="cov4" title="7">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
                 Bucket: aws.String(body.NewName),
-        }); err != nil </span><span class="cov0" title="0">{
+        }); err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to create destination bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
         // Copy all objects from old to new bucket
-        <span class="cov1" title="1">listOut, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+        <span class="cov4" title="6">listOut, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
                 Bucket: aws.String(oldName),
         })
-        if err != nil </span><span class="cov0" title="0">{
+        if err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to list objects for copy: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov1" title="1">for _, obj := range listOut.Contents </span><span class="cov1" title="1">{
+        <span class="cov4" title="5">for _, obj := range listOut.Contents </span><span class="cov3" title="3">{
                 key := aws.ToString(obj.Key)
                 if _, err := a.S3Client.CopyObject(r.Context(), &amp;s3.CopyObjectInput{
                         Bucket:     aws.String(body.NewName),
                         CopySource: aws.String(fmt.Sprintf("%s/%s", oldName, key)),
                         Key:        aws.String(key),
-                }); err != nil </span><span class="cov0" title="0">{
+                }); err != nil </span><span class="cov1" title="1">{
                         jsonError(w, fmt.Sprintf("failed to copy object %q: %v", key, err), http.StatusInternalServerError)
                         return
                 }</span>
         }
 
         // Delete objects from old bucket then delete the bucket itself
-        <span class="cov1" title="1">if len(listOut.Contents) &gt; 0 </span><span class="cov1" title="1">{
+        <span class="cov3" title="4">if len(listOut.Contents) &gt; 0 </span><span class="cov2" title="2">{
                 objectIds := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
-                for _, obj := range listOut.Contents </span><span class="cov1" title="1">{
+                for _, obj := range listOut.Contents </span><span class="cov2" title="2">{
                         objectIds = append(objectIds, types.ObjectIdentifier{Key: obj.Key})
                 }</span>
-                <span class="cov1" title="1">if _, err := a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
+                <span class="cov2" title="2">if _, err := a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
                         Bucket: aws.String(oldName),
                         Delete: &amp;types.Delete{Objects: objectIds},
-                }); err != nil </span><span class="cov0" title="0">{
+                }); err != nil </span><span class="cov1" title="1">{
                         jsonError(w, fmt.Sprintf("failed to delete old objects: %v", err), http.StatusInternalServerError)
                         return
                 }</span>
         }
 
-        <span class="cov1" title="1">if _, err := a.S3Client.DeleteBucket(r.Context(), &amp;s3.DeleteBucketInput{
+        <span class="cov3" title="3">if _, err := a.S3Client.DeleteBucket(r.Context(), &amp;s3.DeleteBucketInput{
                 Bucket: aws.String(oldName),
-        }); err != nil </span><span class="cov0" title="0">{
+        }); err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to delete old bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        <span class="cov2" title="2">w.Header().Set("Content-Type", "application/json")
         json.NewEncoder(w).Encode(struct { //nolint:errcheck
                 Name      string    `json:"name"`
                 CreatedAt time.Time `json:"created_at"`
         }{Name: body.NewName, CreatedAt: time.Now().UTC()})
         emitAudit(a, r, "bucket.rename", "/buckets/"+oldName+"/rename", http.StatusOK)</span>
 }
+
+// ListBucketTrashHandler handles GET /buckets/trash.
+// Returns buckets in trash owned by the authenticated user.
+func (a *App) ListBucketTrashHandler(w http.ResponseWriter, r *http.Request) <span class="cov4" title="5">{
+        if a.Shares == nil </span><span class="cov2" title="2">{
+                jsonError(w, "trash feature not available", http.StatusServiceUnavailable)
+                return
+        }</span>
+
+        <span class="cov3" title="3">claims, ok := ClaimsFromContext(r.Context())
+        if !ok || claims.Subject == "" </span><span class="cov1" title="1">{
+                jsonError(w, "authentication required", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov2" title="2">buckets, err := a.Shares.GetTrashedBuckets(r.Context(), claims.Subject)
+        if err != nil </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("failed to list trashed buckets: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{"data": buckets}) //nolint:errcheck
+        emitAudit(a, r, "bucket.trash.list", "/buckets/trash", http.StatusOK)</span>
+}
+
+// RestoreBucketHandler handles POST /buckets/{name}/restore.
+// Removes the bucket from trash so it becomes accessible again.
+func (a *App) RestoreBucketHandler(w http.ResponseWriter, r *http.Request, name string) <span class="cov4" title="6">{
+        if a.Shares == nil </span><span class="cov2" title="2">{
+                jsonError(w, "trash feature not available", http.StatusServiceUnavailable)
+                return
+        }</span>
+
+        <span class="cov3" title="4">if claims, ok := ClaimsFromContext(r.Context()); ok &amp;&amp; !claims.OwnsBucket(name) </span><span class="cov1" title="1">{
+                jsonError(w, "you do not own this bucket", http.StatusForbidden)
+                return
+        }</span>
+
+        <span class="cov3" title="3">if name == "" </span><span class="cov0" title="0">{
+                jsonError(w, "bucket name must not be empty", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov3" title="3">if err := a.Shares.RestoreBucket(r.Context(), name); err != nil </span><span class="cov2" title="2">{
+                if strings.Contains(err.Error(), "not found in trash") </span><span class="cov1" title="1">{
+                        jsonError(w, "bucket not found in trash", http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to restore bucket: %v", err), http.StatusInternalServerError)
+                return</span>
+        }
+
+        <span class="cov1" title="1">w.WriteHeader(http.StatusNoContent)
+        emitAudit(a, r, "bucket.restore", "/buckets/"+name+"/restore", http.StatusNoContent)</span>
+}
+
+// provisionSSEKey provisions a per-user Vault transit key and sets SSE-KMS default
+// encryption on the bucket. Non-fatal: logs errors but never blocks bucket creation.
+func (a *App) provisionSSEKey(ctx context.Context, bucket, sub string) <span class="cov0" title="0">{
+        keyName := userKeyName(sub)
+        if err := a.VaultClient.ProvisionKey(ctx, sub); err != nil </span><span class="cov0" title="0">{
+                log.Printf("vault: provision key for %s: %v", sub, err)
+                return
+        }</span>
+        <span class="cov0" title="0">if _, err := a.S3Client.PutBucketEncryption(ctx, &amp;s3.PutBucketEncryptionInput{
+                Bucket: aws.String(bucket),
+                ServerSideEncryptionConfiguration: &amp;types.ServerSideEncryptionConfiguration{
+                        Rules: []types.ServerSideEncryptionRule{
+                                {
+                                        ApplyServerSideEncryptionByDefault: &amp;types.ServerSideEncryptionByDefault{
+                                                SSEAlgorithm:   types.ServerSideEncryptionAwsKms,
+                                                KMSMasterKeyID: aws.String(keyName),
+                                        },
+                                },
+                        },
+                },
+        }); err != nil </span><span class="cov0" title="0">{
+                log.Printf("minio: set SSE-KMS on bucket %q (key=%s): %v", bucket, keyName, err)
+        }</span>
+}
+
+// setTrashLifecycleRule sets a MinIO lifecycle rule on a bucket so that objects
+// under the __trash__/ prefix are automatically hard-deleted after TrashRetentionDays.
+// Failure is non-fatal — bucket creation is not blocked.
+func (a *App) setTrashLifecycleRule(ctx context.Context, bucket string) <span class="cov0" title="0">{
+        days := int32(a.TrashRetentionDays)
+        _, err := a.S3Client.PutBucketLifecycleConfiguration(ctx, &amp;s3.PutBucketLifecycleConfigurationInput{
+                Bucket: aws.String(bucket),
+                LifecycleConfiguration: &amp;types.BucketLifecycleConfiguration{
+                        Rules: []types.LifecycleRule{
+                                {
+                                        ID:     aws.String("trash-expiry"),
+                                        Status: types.ExpirationStatusEnabled,
+                                        Filter: &amp;types.LifecycleRuleFilter{
+                                                Prefix: aws.String("__trash__/"),
+                                        },
+                                        Expiration: &amp;types.LifecycleExpiration{
+                                                Days: aws.Int32(days),
+                                        },
+                                },
+                        },
+                },
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                // Non-fatal: lifecycle rule failure should not block bucket creation
+                _ = err
+        }</span>
+}
+
 </pre>
 		
-		<pre class="file" id="file3" style="display: none">package uploader
+		<pre class="file" id="file4" style="display: none">package uploader
 
-import "context"
+import (
+        "context"
+        "strings"
+)
 
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
@@ -736,68 +1112,89 @@ type Claims struct {
 
 // ClaimsFromContext retrieves Claims injected by the JWT middleware.
 // Returns (nil, false) when no claims are present (e.g. dev mode bypass).
-func ClaimsFromContext(ctx context.Context) (*Claims, bool) <span class="cov10" title="53">{
+func ClaimsFromContext(ctx context.Context) (*Claims, bool) <span class="cov10" title="192">{
         c, ok := ctx.Value(claimsKey).(*Claims)
         return c, ok
 }</span>
 
 // CanAccessBucket reports whether the claims grant access to the named bucket.
 // Admin claims (AllowedBuckets == ["*"]) grant access to every bucket.
-func (c *Claims) CanAccessBucket(bucket string) bool <span class="cov5" title="6">{
-        for _, b := range c.AllowedBuckets </span><span class="cov5" title="6">{
-                if b == "*" </span><span class="cov0" title="0">{
+// Owning a parent bucket (e.g. "foo") also grants access to its sub-buckets ("foo--bar").
+func (c *Claims) CanAccessBucket(bucket string) bool <span class="cov7" title="38">{
+        for _, b := range c.AllowedBuckets </span><span class="cov6" title="33">{
+                if b == "*" </span><span class="cov5" title="12">{
                         return true
                 }</span>
-                <span class="cov5" title="6">if b == bucket </span><span class="cov1" title="1">{
+                <span class="cov6" title="21">if b == bucket </span><span class="cov4" title="9">{
+                        return true
+                }</span>
+                <span class="cov5" title="12">if strings.HasPrefix(bucket, b+"--") </span><span class="cov2" title="2">{
                         return true
                 }</span>
         }
-        <span class="cov4" title="5">return false</span>
+        <span class="cov5" title="15">return false</span>
 }
 
 // OwnsBucket reports whether this user is the explicit owner of the bucket.
 // The bucket must appear in AllowedBuckets without wildcard, or the user must be an admin.
-func (c *Claims) OwnsBucket(bucket string) bool <span class="cov0" title="0">{
-        if c.Role == "admin" </span><span class="cov0" title="0">{
+// Owning a parent bucket also implies ownership of its sub-buckets.
+func (c *Claims) OwnsBucket(bucket string) bool <span class="cov7" title="59">{
+        if c.Role == "admin" </span><span class="cov1" title="1">{
                 return true
         }</span>
-        <span class="cov0" title="0">for _, b := range c.AllowedBuckets </span><span class="cov0" title="0">{
-                if b != "*" &amp;&amp; b == bucket </span><span class="cov0" title="0">{
+        <span class="cov7" title="58">for _, b := range c.AllowedBuckets </span><span class="cov7" title="56">{
+                if b == "*" </span><span class="cov1" title="1">{
+                        continue</span>
+                }
+                <span class="cov7" title="55">if b == bucket </span><span class="cov7" title="42">{
+                        return true
+                }</span>
+                <span class="cov5" title="13">if strings.HasPrefix(bucket, b+"--") </span><span class="cov4" title="8">{
                         return true
                 }</span>
         }
-        <span class="cov0" title="0">return false</span>
+        <span class="cov4" title="8">return false</span>
 }
 </pre>
 		
-		<pre class="file" id="file4" style="display: none">package uploader
+		<pre class="file" id="file5" style="display: none">package uploader
 
-import "net/http"
+import (
+        "net/http"
+        "os"
+)
 
 // CORS adds cross-origin headers to every response and handles OPTIONS preflight
 // by returning 204 No Content immediately — without forwarding to the actual handler.
 // Browsers send an OPTIONS preflight before POST/PATCH/DELETE when custom headers
 // (e.g. Tus-Resumable) are present; failing to respond with 2xx blocks the real request.
-func CORS(next http.Handler) http.Handler <span class="cov10" title="4">{
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov10" title="4">{
-                w.Header().Set("Access-Control-Allow-Origin", "*")
+//
+// The allowed origin is read from the ALLOWED_ORIGIN env var at middleware creation time.
+// Defaults to "*" when not set (dev/test mode).
+func CORS(next http.Handler) http.Handler <span class="cov10" title="5">{
+        allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
+        if allowedOrigin == "" </span><span class="cov8" title="4">{
+                allowedOrigin = "*"
+        }</span>
+        <span class="cov10" title="5">return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov10" title="5">{
+                w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
                 w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD")
                 w.Header().Set("Access-Control-Allow-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Content-Type, Upload-Defer-Length, Upload-Concat, Location, X-HTTP-Method-Override, Range")
                 w.Header().Set("Access-Control-Expose-Headers", "Tus-Resumable, Upload-Length, Upload-Metadata, Upload-Offset, Location, Accept-Ranges, Content-Range")
                 w.Header().Set("Access-Control-Max-Age", "86400")
 
                 // Respond to preflight immediately — do not forward to handlers.
-                if r.Method == http.MethodOptions </span><span class="cov5" title="2">{
+                if r.Method == http.MethodOptions </span><span class="cov4" title="2">{
                         w.WriteHeader(http.StatusNoContent)
                         return
                 }</span>
 
-                <span class="cov5" title="2">next.ServeHTTP(w, r)</span>
+                <span class="cov7" title="3">next.ServeHTTP(w, r)</span>
         })
 }
 </pre>
 		
-		<pre class="file" id="file5" style="display: none">package uploader
+		<pre class="file" id="file6" style="display: none">package uploader
 
 import (
         "crypto/rsa"
@@ -808,33 +1205,301 @@ import (
 
 // parseRSAPublicKeyFromJWK reconstructs an *rsa.PublicKey from the base64url-encoded
 // modulus (n) and exponent (e) fields of a JWK.
-func parseRSAPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) <span class="cov0" title="0">{
+func parseRSAPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) <span class="cov10" title="4">{
         nBytes, err := base64.RawURLEncoding.DecodeString(nB64)
-        if err != nil </span><span class="cov0" title="0">{
+        if err != nil </span><span class="cov1" title="1">{
                 return nil, fmt.Errorf("decode modulus: %w", err)
         }</span>
 
-        <span class="cov0" title="0">eBytes, err := base64.RawURLEncoding.DecodeString(eB64)
-        if err != nil </span><span class="cov0" title="0">{
+        <span class="cov8" title="3">eBytes, err := base64.RawURLEncoding.DecodeString(eB64)
+        if err != nil </span><span class="cov1" title="1">{
                 return nil, fmt.Errorf("decode exponent: %w", err)
         }</span>
 
-        <span class="cov0" title="0">n := new(big.Int).SetBytes(nBytes)
+        <span class="cov5" title="2">n := new(big.Int).SetBytes(nBytes)
 
         // Exponent is big-endian bytes; convert to int
         var e int
-        for _, b := range eBytes </span><span class="cov0" title="0">{
+        for _, b := range eBytes </span><span class="cov10" title="4">{
                 e = e&lt;&lt;8 | int(b)
         }</span>
-        <span class="cov0" title="0">if e == 0 </span><span class="cov0" title="0">{
+        <span class="cov5" title="2">if e == 0 </span><span class="cov1" title="1">{
                 return nil, fmt.Errorf("invalid exponent: 0")
         }</span>
 
-        <span class="cov0" title="0">return &amp;rsa.PublicKey{N: n, E: e}, nil</span>
+        <span class="cov1" title="1">return &amp;rsa.PublicKey{N: n, E: e}, nil</span>
 }
 </pre>
 		
-		<pre class="file" id="file6" style="display: none">package uploader
+		<pre class="file" id="file7" style="display: none">package uploader
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "net/http"
+        "net/url"
+        "strings"
+)
+
+// KeycloakGranter manages user attributes and lifecycle in Keycloak via the admin API.
+// A nil KeycloakGranter skips all Keycloak calls (dev/test mode or when admin credentials are not configured).
+type KeycloakGranter interface {
+        GrantBucket(ctx context.Context, email, bucket string) error
+        DeleteUser(ctx context.Context, userID string) error
+}
+
+// HTTPKeycloakGranter calls the Keycloak admin API using admin credentials.
+type HTTPKeycloakGranter struct {
+        adminBaseURL string // e.g. http://keycloak:8080/auth
+        realm        string // e.g. codirs
+        username     string
+        password     string
+}
+
+// NewHTTPKeycloakGranter constructs an HTTPKeycloakGranter from the internal issuer URL
+// (e.g. http://keycloak:8080/auth/realms/codirs) and admin credentials.
+// Returns nil if any argument is empty — callers treat nil as "granting disabled".
+func NewHTTPKeycloakGranter(internalIssuer, username, password string) *HTTPKeycloakGranter <span class="cov9" title="5">{
+        if internalIssuer == "" || username == "" || password == "" </span><span class="cov6" title="3">{
+                return nil
+        }</span>
+        <span class="cov4" title="2">parts := strings.SplitN(internalIssuer, "/realms/", 2)
+        if len(parts) != 2 </span><span class="cov1" title="1">{
+                return nil
+        }</span>
+        <span class="cov1" title="1">return &amp;HTTPKeycloakGranter{
+                adminBaseURL: parts[0],
+                realm:        parts[1],
+                username:     username,
+                password:     password,
+        }</span>
+}
+
+// GrantBucket ensures bucket appears in the user's allowed_buckets Keycloak attribute.
+// It is idempotent: if the bucket is already present, it is a no-op.
+func (g *HTTPKeycloakGranter) GrantBucket(ctx context.Context, email, bucket string) error <span class="cov7" title="4">{
+        token, err := g.getAdminToken(ctx)
+        if err != nil </span><span class="cov1" title="1">{
+                return fmt.Errorf("get admin token: %w", err)
+        }</span>
+
+        // Ensure allowed_buckets is declared in the user profile schema.
+        // Keycloak 24 requires custom attributes to be declared before they can be stored.
+        <span class="cov6" title="3">if err := g.ensureUserProfileAttr(ctx, token); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("ensure user profile attr: %w", err)
+        }</span>
+
+        <span class="cov6" title="3">userID, attrs, err := g.getUserAttrs(ctx, token, email)
+        if err != nil </span><span class="cov1" title="1">{
+                return fmt.Errorf("get user %s: %w", email, err)
+        }</span>
+
+        // Idempotent: skip if bucket already granted.
+        <span class="cov4" title="2">for _, b := range attrs["allowed_buckets"] </span><span class="cov1" title="1">{
+                if b == bucket </span><span class="cov1" title="1">{
+                        return nil
+                }</span>
+        }
+        <span class="cov1" title="1">attrs["allowed_buckets"] = append(attrs["allowed_buckets"], bucket)
+
+        if err := g.updateUserAttrs(ctx, token, userID, attrs); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("update user attrs: %w", err)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+func (g *HTTPKeycloakGranter) getAdminToken(ctx context.Context) (string, error) <span class="cov10" title="6">{
+        tokenURL := fmt.Sprintf("%s/realms/master/protocol/openid-connect/token", g.adminBaseURL)
+        form := url.Values{
+                "client_id":  {"admin-cli"},
+                "grant_type": {"password"},
+                "username":   {g.username},
+                "password":   {g.password},
+        }
+        req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+        <span class="cov10" title="6">req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+        <span class="cov10" title="6">defer resp.Body.Close() //nolint:errcheck
+
+        if resp.StatusCode != http.StatusOK </span><span class="cov4" title="2">{
+                return "", fmt.Errorf("token endpoint returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov7" title="4">var result struct {
+                AccessToken string `json:"access_token"`
+        }
+        if err := json.NewDecoder(resp.Body).Decode(&amp;result); err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+        <span class="cov7" title="4">return result.AccessToken, nil</span>
+}
+
+func (g *HTTPKeycloakGranter) getUserAttrs(ctx context.Context, token, email string) (string, map[string][]string, error) <span class="cov6" title="3">{
+        // Search by email field first; fall back to username (Google IdP may store email as username only).
+        for _, param := range []string{"email", "username"} </span><span class="cov7" title="4">{
+                usersURL := fmt.Sprintf("%s/admin/realms/%s/users?%s=%s&amp;exact=true",
+                        g.adminBaseURL, g.realm, param, url.QueryEscape(email))
+                req, err := http.NewRequestWithContext(ctx, http.MethodGet, usersURL, nil)
+                if err != nil </span><span class="cov0" title="0">{
+                        return "", nil, err
+                }</span>
+                <span class="cov7" title="4">req.Header.Set("Authorization", "Bearer "+token)
+
+                resp, err := http.DefaultClient.Do(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return "", nil, err
+                }</span>
+                <span class="cov7" title="4">var users []struct {
+                        ID         string              `json:"id"`
+                        Attributes map[string][]string `json:"attributes"`
+                }
+                err = json.NewDecoder(resp.Body).Decode(&amp;users)
+                resp.Body.Close() //nolint:errcheck
+                if err != nil || resp.StatusCode != http.StatusOK </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov7" title="4">if len(users) == 0 </span><span class="cov4" title="2">{
+                        continue</span>
+                }
+                <span class="cov4" title="2">u := users[0]
+                if u.Attributes == nil </span><span class="cov0" title="0">{
+                        u.Attributes = map[string][]string{}
+                }</span>
+                <span class="cov4" title="2">return u.ID, u.Attributes, nil</span>
+        }
+        <span class="cov1" title="1">return "", nil, fmt.Errorf("user not found by email or username: %s", email)</span>
+}
+
+func (g *HTTPKeycloakGranter) updateUserAttrs(ctx context.Context, token, userID string, attrs map[string][]string) error <span class="cov1" title="1">{
+        userURL := fmt.Sprintf("%s/admin/realms/%s/users/%s", g.adminBaseURL, g.realm, userID)
+        data, err := json.Marshal(map[string]interface{}{"attributes": attrs})
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov1" title="1">req, err := http.NewRequestWithContext(ctx, http.MethodPut, userURL, bytes.NewReader(data))
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov1" title="1">req.Header.Set("Authorization", "Bearer "+token)
+        req.Header.Set("Content-Type", "application/json")
+
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov1" title="1">defer resp.Body.Close() //nolint:errcheck
+
+        if resp.StatusCode != http.StatusNoContent </span><span class="cov0" title="0">{
+                return fmt.Errorf("update user endpoint returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+// DeleteUser permanently removes a user from Keycloak by their subject UUID.
+// Called as part of account deletion — after all data has already been wiped.
+func (g *HTTPKeycloakGranter) DeleteUser(ctx context.Context, userID string) error <span class="cov4" title="2">{
+        token, err := g.getAdminToken(ctx)
+        if err != nil </span><span class="cov1" title="1">{
+                return fmt.Errorf("get admin token: %w", err)
+        }</span>
+
+        <span class="cov1" title="1">userURL := fmt.Sprintf("%s/admin/realms/%s/users/%s", g.adminBaseURL, g.realm, userID)
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, userURL, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov1" title="1">req.Header.Set("Authorization", "Bearer "+token)
+
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov1" title="1">defer resp.Body.Close() //nolint:errcheck
+
+        if resp.StatusCode != http.StatusNoContent </span><span class="cov0" title="0">{
+                return fmt.Errorf("delete user endpoint returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+// ensureUserProfileAttr ensures the allowed_buckets attribute is declared in the Keycloak
+// user profile schema. Keycloak 24+ requires custom attributes to be declared before they
+// can be stored on users. This call is idempotent — it skips if already declared.
+func (g *HTTPKeycloakGranter) ensureUserProfileAttr(ctx context.Context, token string) error <span class="cov6" title="3">{
+        profileURL := fmt.Sprintf("%s/admin/realms/%s/users/profile", g.adminBaseURL, g.realm)
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov6" title="3">req.Header.Set("Authorization", "Bearer "+token)
+
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov6" title="3">var profile map[string]interface{}
+        err = json.NewDecoder(resp.Body).Decode(&amp;profile)
+        resp.Body.Close() //nolint:errcheck
+        if err != nil || resp.StatusCode != http.StatusOK </span><span class="cov0" title="0">{
+                return fmt.Errorf("get user profile returned %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov6" title="3">attrs, _ := profile["attributes"].([]interface{})
+        for _, a := range attrs </span><span class="cov1" title="1">{
+                if am, ok := a.(map[string]interface{}); ok </span><span class="cov1" title="1">{
+                        if am["name"] == "allowed_buckets" </span><span class="cov1" title="1">{
+                                return nil // already declared
+                        }</span>
+                }
+        }
+
+        // Not declared yet — add it as admin-only, multivalued.
+        <span class="cov4" title="2">newAttr := map[string]interface{}{
+                "name":        "allowed_buckets",
+                "displayName": "Allowed Buckets",
+                "multivalued": true,
+                "permissions": map[string]interface{}{
+                        "view": []string{"admin"},
+                        "edit": []string{"admin"},
+                },
+                "annotations": map[string]interface{}{},
+        }
+        profile["attributes"] = append(attrs, newAttr)
+
+        data, err := json.Marshal(profile)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="2">req, err = http.NewRequestWithContext(ctx, http.MethodPut, profileURL, bytes.NewReader(data))
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="2">req.Header.Set("Authorization", "Bearer "+token)
+        req.Header.Set("Content-Type", "application/json")
+
+        resp, err = http.DefaultClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="2">defer resp.Body.Close() //nolint:errcheck
+
+        if resp.StatusCode != http.StatusOK </span><span class="cov0" title="0">{
+                return fmt.Errorf("update user profile returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov4" title="2">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package uploader
 
 import (
         "encoding/json"
@@ -847,15 +1512,22 @@ import (
         "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+// provisionRequest is the body for POST /internal/provision-user.
+type provisionRequest struct {
+        Username string `json:"username"`
+        Email    string `json:"email"`
+        Subject  string `json:"subject"` // Keycloak sub UUID — used for per-user SSE-KMS key
+}
+
 // InternalSecretMiddleware guards internal endpoints with a shared secret.
 // If secret is empty (dev mode), all requests are allowed.
-func InternalSecretMiddleware(secret string, next http.Handler) http.Handler <span class="cov6" title="4">{
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov6" title="4">{
-                if secret != "" &amp;&amp; r.Header.Get("X-Internal-Secret") != secret </span><span class="cov3" title="2">{
+func InternalSecretMiddleware(secret string, next http.Handler) http.Handler <span class="cov4" title="4">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov4" title="4">{
+                if secret != "" &amp;&amp; r.Header.Get("X-Internal-Secret") != secret </span><span class="cov2" title="2">{
                         jsonError(w, "unauthorized", http.StatusUnauthorized)
                         return
                 }</span>
-                <span class="cov3" title="2">next.ServeHTTP(w, r)</span>
+                <span class="cov2" title="2">next.ServeHTTP(w, r)</span>
         })
 }
 
@@ -863,7 +1535,7 @@ var nonAlphanumRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeUsername lowercases the input, replaces runs of non-alphanumeric
 // characters with a single hyphen, and trims leading/trailing hyphens.
-func sanitizeUsername(username string) string <span class="cov10" title="12">{
+func sanitizeUsername(username string) string <span class="cov10" title="28">{
         s := strings.ToLower(username)
         s = nonAlphanumRe.ReplaceAllString(s, "-")
         s = strings.Trim(s, "-")
@@ -876,57 +1548,170 @@ type provisionResponse struct {
 }
 
 // ProvisionUserHandler handles POST /internal/provision-user.
-// Creates the user's personal bucket ({username}-files) if it does not already exist.
+// Creates the user's personal bucket ({username}-files) if it does not already exist,
+// then grants access by setting the allowed_buckets Keycloak attribute (when configured).
 // Idempotent: returns 200 if the bucket already exists, 201 if newly created.
-func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) <span class="cov6" title="5">{
+func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) <span class="cov7" title="10">{
         if r.Method != http.MethodPost </span><span class="cov1" title="1">{
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
                 return
         }</span>
 
-        <span class="cov6" title="4">var body struct {
-                Username string `json:"username"`
-        }
+        <span class="cov6" title="9">var body provisionRequest
         if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
                 jsonError(w, "invalid JSON body", http.StatusBadRequest)
                 return
         }</span>
 
-        <span class="cov6" title="4">sanitized := sanitizeUsername(body.Username)
+        <span class="cov6" title="9">sanitized := sanitizeUsername(body.Username)
         if sanitized == "" </span><span class="cov1" title="1">{
                 jsonError(w, "username must not be empty", http.StatusBadRequest)
                 return
         }</span>
 
-        <span class="cov4" title="3">bucketName := sanitized + "-files"
+        <span class="cov6" title="8">bucketName := sanitized + "-files"
 
         exists, err := a.bucketExists(r, bucketName)
-        if err != nil </span><span class="cov0" title="0">{
+        if err != nil </span><span class="cov1" title="1">{
                 jsonError(w, fmt.Sprintf("failed to check bucket: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov4" title="3">w.Header().Set("Content-Type", "application/json")
-        if exists </span><span class="cov1" title="1">{
-                w.WriteHeader(http.StatusOK)
-                json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "exists"}) //nolint:errcheck
+        <span class="cov6" title="7">status := "exists"
+        if !exists </span><span class="cov5" title="5">{
+                if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
+                        Bucket: aws.String(bucketName),
+                }); err != nil </span><span class="cov1" title="1">{
+                        jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
+                        return
+                }</span>
+                <span class="cov4" title="4">status = "created"
+
+                // Set per-user SSE-KMS encryption on the user's primary bucket (best-effort, non-fatal).
+                if a.VaultClient != nil &amp;&amp; body.Subject != "" </span><span class="cov0" title="0">{
+                        a.provisionSSEKey(r.Context(), bucketName, body.Subject)
+                }</span>
+        }
+
+        // Grant Keycloak access regardless of whether bucket was just created or already existed,
+        // so that access is always consistent with bucket state.
+        <span class="cov5" title="6">if a.KeycloakGranter != nil &amp;&amp; body.Email != "" </span><span class="cov2" title="2">{
+                if err := a.KeycloakGranter.GrantBucket(r.Context(), body.Email, bucketName); err != nil </span><span class="cov1" title="1">{
+                        jsonError(w, fmt.Sprintf("failed to grant bucket access: %v", err), http.StatusInternalServerError)
+                        return
+                }</span>
+        }
+
+        <span class="cov5" title="5">w.Header().Set("Content-Type", "application/json")
+        if status == "created" </span><span class="cov3" title="3">{
+                w.WriteHeader(http.StatusCreated)
+                json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "created"}) //nolint:errcheck
+                emitAudit(a, r, "bucket.provision", "/internal/provision-user/"+bucketName, http.StatusCreated)
                 return
         }</span>
-
-        <span class="cov3" title="2">if _, err := a.S3Client.CreateBucket(r.Context(), &amp;s3.CreateBucketInput{
-                Bucket: aws.String(bucketName),
-        }); err != nil </span><span class="cov0" title="0">{
-                jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
-                return
-        }</span>
-
-        <span class="cov3" title="2">w.WriteHeader(http.StatusCreated)
-        json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "created"}) //nolint:errcheck
-        emitAudit(a, r, "bucket.provision", "/internal/provision-user/"+bucketName, http.StatusCreated)</span>
+        <span class="cov2" title="2">w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(provisionResponse{Bucket: bucketName, Status: "exists"})</span> //nolint:errcheck
 }
 </pre>
 		
-		<pre class="file" id="file7" style="display: none">package uploader
+		<pre class="file" id="file9" style="display: none">package uploader
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "log"
+        "time"
+
+        "github.com/aws/aws-sdk-go-v2/aws"
+        "github.com/aws/aws-sdk-go-v2/service/s3"
+        "github.com/aws/aws-sdk-go-v2/service/s3/types"
+)
+
+// ProcessPurgeEvent handles a bucket.purge Kafka event published by go-shares.
+// It hard-deletes all MinIO objects + the bucket, cleans up shares,
+// then removes the deleted_buckets DB record via go-shares.
+func (a *App) ProcessPurgeEvent(ctx context.Context, data []byte) <span class="cov10" title="7">{
+        var event struct {
+                BucketName  string `json:"bucketName"`
+                OwnerUserID string `json:"ownerUserId"`
+        }
+        if err := json.Unmarshal(data, &amp;event); err != nil </span><span class="cov1" title="1">{
+                log.Printf("purge consumer: failed to parse event: %v", err)
+                return
+        }</span>
+        <span class="cov9" title="6">if event.BucketName == "" </span><span class="cov1" title="1">{
+                log.Printf("purge consumer: missing bucketName in event")
+                return
+        }</span>
+
+        <span class="cov8" title="5">log.Printf("purge consumer: purging bucket %q (owner: %s)", event.BucketName, event.OwnerUserID)
+
+        // List all objects (may be empty if bucket was already gone)
+        listOut, listErr := a.S3Client.ListObjectsV2(ctx, &amp;s3.ListObjectsV2Input{
+                Bucket: aws.String(event.BucketName),
+        })
+        if listErr != nil &amp;&amp; !isBucketNotFound(listErr) </span><span class="cov1" title="1">{
+                log.Printf("purge consumer: failed to list objects in %q: %v", event.BucketName, listErr)
+                return
+        }</span>
+
+        // Delete all objects
+        <span class="cov7" title="4">if listOut != nil &amp;&amp; len(listOut.Contents) &gt; 0 </span><span class="cov4" title="2">{
+                objectIDs := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
+                for _, obj := range listOut.Contents </span><span class="cov4" title="2">{
+                        objectIDs = append(objectIDs, types.ObjectIdentifier{Key: obj.Key})
+                }</span>
+                <span class="cov4" title="2">if _, err := a.S3Client.DeleteObjects(ctx, &amp;s3.DeleteObjectsInput{
+                        Bucket: aws.String(event.BucketName),
+                        Delete: &amp;types.Delete{Objects: objectIDs},
+                }); err != nil </span><span class="cov1" title="1">{
+                        log.Printf("purge consumer: failed to delete objects in %q: %v", event.BucketName, err)
+                        return
+                }</span>
+        }
+
+        // Delete the MinIO bucket (ignore "already gone" errors)
+        <span class="cov6" title="3">if _, err := a.S3Client.DeleteBucket(ctx, &amp;s3.DeleteBucketInput{
+                Bucket: aws.String(event.BucketName),
+        }); err != nil &amp;&amp; !isBucketNotFound(err) </span><span class="cov0" title="0">{
+                log.Printf("purge consumer: failed to delete MinIO bucket %q: %v", event.BucketName, err)
+                return
+        }</span>
+
+        // Delete all shares for this bucket (non-fatal)
+        <span class="cov6" title="3">if a.Shares != nil </span><span class="cov4" title="2">{
+                if err := a.Shares.DeleteSharesForBucket(ctx, event.BucketName); err != nil </span><span class="cov4" title="2">{
+                        log.Printf("purge consumer: failed to delete shares for %q: %v", event.BucketName, err)
+                }</span>
+        }
+
+        // Remove the deleted_buckets DB record (non-fatal — ticker will retry on next run if this fails)
+        <span class="cov6" title="3">if a.Shares != nil </span><span class="cov4" title="2">{
+                if err := a.Shares.PurgeBucketRecord(ctx, event.BucketName); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("purge consumer: failed to purge DB record for %q: %v", event.BucketName, err)
+                }</span>
+        }
+
+        // Emit audit event
+        <span class="cov6" title="3">go func() </span><span class="cov6" title="3">{
+                if err := a.Audit.Emit(ctx, AuditEvent{
+                        Action:    "bucket.purge",
+                        Resource:  fmt.Sprintf("/buckets/%s", event.BucketName),
+                        UserID:    event.OwnerUserID,
+                        Method:    "SYSTEM",
+                        Status:    200,
+                        Timestamp: time.Now().UTC(),
+                }); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("purge consumer: audit emit error: %v", err)
+                }</span>
+        }()
+
+        <span class="cov6" title="3">log.Printf("purge consumer: bucket %q purged successfully", event.BucketName)</span>
+}
+</pre>
+		
+		<pre class="file" id="file10" style="display: none">package uploader
 
 import (
         "context"
@@ -935,6 +1720,7 @@ import (
         "errors"
         "fmt"
         "io"
+        "log"
         "net/http"
         "os"
         "strconv"
@@ -962,34 +1748,63 @@ type S3API interface {
         DeleteBucket(ctx context.Context, params *s3.DeleteBucketInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketOutput, error)
         HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
         CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
+        PutBucketLifecycleConfiguration(ctx context.Context, params *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
+        PutBucketEncryption(ctx context.Context, params *s3.PutBucketEncryptionInput, optFns ...func(*s3.Options)) (*s3.PutBucketEncryptionOutput, error)
 }
 
 // App holds the dependencies for the uploader service.
 type App struct {
-        TusHandler   http.Handler
-        S3Client     S3API
-        BucketName   string
-        S3Endpoint   string
-        Audit        AuditProducer            // never nil; use NoopAuditProducer in tests
-        Shares       *SharesClient            // nil when GO_SHARES_URL not configured
-        tusHandlers  sync.Map                 // map[string]http.Handler — per-user-bucket TUS handlers
+        TusHandler         http.Handler
+        S3Client           S3API
+        Presigner          Presigner       // nil when S3 client not yet initialized
+        BucketName         string
+        S3Endpoint         string
+        Audit              AuditProducer   // never nil; use NoopAuditProducer in tests
+        Shares             *SharesClient   // nil when GO_SHARES_URL not configured
+        KeycloakGranter    KeycloakGranter // nil when admin credentials not configured
+        VaultClient        *VaultClient    // nil when VAULT_ADDR not configured (SSE-KMS disabled)
+        TrashRetentionDays int             // 0 = no lifecycle rule set on bucket creation
+        tusHandlers        sync.Map        // map[string]http.Handler — per-user-bucket TUS handlers
 }
 
 // canAccessBucket returns true if the given claims grant access to bucket.
-// It checks JWT allowedBuckets first; falls back to go-shares if configured.
-// Sharees are identified by their email address.
-func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string) bool <span class="cov7" title="4">{
-        if claims.CanAccessBucket(bucket) </span><span class="cov0" title="0">{
+// Checks bucket trash status first (deleted bucket = zero access for everyone).
+// Then checks JWT allowedBuckets, then the user's home bucket derived from email,
+// then falls back to go-shares share access.
+func (a *App) canAccessBucket(ctx context.Context, claims *Claims, bucket string) bool <span class="cov10" title="26">{
+        // Bucket in trash = zero access for owner and all sharees
+        if a.Shares != nil </span><span class="cov4" title="4">{
+                if deleted, err := a.Shares.IsBucketDeleted(ctx, bucket); err == nil &amp;&amp; deleted </span><span class="cov1" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov9" title="25">if claims.CanAccessBucket(bucket) </span><span class="cov8" title="14">{
                 return true
         }</span>
-        <span class="cov7" title="4">if a.Shares == nil || claims.Email == "" </span><span class="cov7" title="4">{
+        // Allow access if the bucket is the user's own home bucket, derived from their email.
+        // This handles the window between first login and the JWT being refreshed to include
+        // allowedBuckets (which Keycloak sets after /internal/provision-user runs).
+        <span class="cov7" title="11">if claims.Email != "" &amp;&amp; isHomeBucket(claims.Email, bucket) </span><span class="cov1" title="1">{
+                return true
+        }</span>
+        <span class="cov7" title="10">if a.Shares == nil || claims.Email == "" </span><span class="cov6" title="8">{
                 return false
         }</span>
-        <span class="cov0" title="0">ok, err := a.Shares.CanAccess(ctx, bucket, claims.Email)
+        <span class="cov2" title="2">ok, err := a.Shares.CanAccess(ctx, bucket, claims.Email)
         if err != nil </span><span class="cov0" title="0">{
                 return false // fail closed
         }</span>
-        <span class="cov0" title="0">return ok</span>
+        <span class="cov2" title="2">return ok</span>
+}
+
+// isHomeBucket returns true if bucket is the user's provisioned home bucket.
+// Home bucket = sanitizeUsername(localpart of email) + "-files".
+func isHomeBucket(email, bucket string) bool <span class="cov8" title="14">{
+        at := strings.Index(email, "@")
+        if at &lt;= 0 </span><span class="cov4" title="3">{
+                return false
+        }</span>
+        <span class="cov7" title="11">return sanitizeUsername(email[:at])+"-files" == bucket</span>
 }
 
 // NewAppFromEnv initializes the App using environment variables.
@@ -1021,7 +1836,7 @@ func NewAppFromEnv() (*App, error) <span class="cov0" title="0">{
                 return nil, fmt.Errorf("unable to load SDK config: %w", err)
         }</span>
 
-        // 2. Create S3 Client
+        // 2. Create S3 Client (internal — Docker network, used for all API calls)
         <span class="cov0" title="0">s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) </span><span class="cov0" title="0">{
                 o.UsePathStyle = true
         }</span>)
@@ -1031,17 +1846,45 @@ func NewAppFromEnv() (*App, error) <span class="cov0" title="0">{
                 return nil, err
         }</span>
 
+        <span class="cov0" title="0">trashRetentionDays := 30
+        if v := os.Getenv("TRASH_RETENTION_DAYS"); v != "" </span><span class="cov0" title="0">{
+                if n, err := strconv.Atoi(v); err == nil &amp;&amp; n &gt; 0 </span><span class="cov0" title="0">{
+                        trashRetentionDays = n
+                }</span>
+        }
+
+        // 3. Create Presigner — uses public URL if configured so share links are externally accessible.
+        // MINIO_PUBLIC_URL should be set to the URL reachable from outside Docker (e.g. Tailscale host).
+        // When empty, falls back to S3_ENDPOINT (internal only — links won't work outside Docker).
+        <span class="cov0" title="0">presigner := s3.NewPresignClient(s3Client)
+        if publicURL := os.Getenv("MINIO_PUBLIC_URL"); publicURL != "" </span><span class="cov0" title="0">{
+                publicResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) </span><span class="cov0" title="0">{
+                        return aws.Endpoint{PartitionID: "aws", URL: publicURL, SigningRegion: region}, nil
+                }</span>)
+                <span class="cov0" title="0">publicCfg, err := config.LoadDefaultConfig(context.TODO(),
+                        config.WithRegion(region),
+                        config.WithEndpointResolverWithOptions(publicResolver),
+                        config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+                )
+                if err == nil </span><span class="cov0" title="0">{
+                        publicS3 := s3.NewFromConfig(publicCfg, func(o *s3.Options) </span><span class="cov0" title="0">{ o.UsePathStyle = true }</span>)
+                        <span class="cov0" title="0">presigner = s3.NewPresignClient(publicS3)</span>
+                }
+        }
+
         <span class="cov0" title="0">return &amp;App{
-                TusHandler: tusHandler,
-                S3Client:   s3Client,
-                BucketName: bucketName,
-                S3Endpoint: s3Endpoint,
-                Audit:      &amp;NoopAuditProducer{},
+                TusHandler:         tusHandler,
+                S3Client:           s3Client,
+                Presigner:          presigner,
+                BucketName:         bucketName,
+                S3Endpoint:         s3Endpoint,
+                Audit:              &amp;NoopAuditProducer{},
+                TrashRetentionDays: trashRetentionDays,
         }, nil</span>
 }
 
 // NewTusHandler creates a Tus handler pointed at the root bucket (legacy/fallback).
-func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, error) <span class="cov9" title="5">{
+func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, error) <span class="cov5" title="5">{
         store := s3store.New(bucketName, s3Client)
 
         composer := handler.NewStoreComposer()
@@ -1057,7 +1900,7 @@ func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, err
                 return nil, fmt.Errorf("unable to create tus handler: %w", err)
         }</span>
 
-        <span class="cov9" title="5">return http.StripPrefix("/files/", tusHandler), nil</span>
+        <span class="cov5" title="5">return http.StripPrefix("/files/", tusHandler), nil</span>
 }
 
 // NewTusHandlerForBucket creates a Tus handler with a user-bucket-specific BasePath.
@@ -1099,18 +1942,18 @@ func (a *App) GetTusHandlerForBucket(bucket string) (http.Handler, error) <span 
 
 // ExtractBucketFromTUSMetadata parses the Upload-Metadata header and returns the
 // base64-decoded value for the "bucket" key. Returns "" if not found or invalid.
-func ExtractBucketFromTUSMetadata(header string) string <span class="cov7" title="4">{
-        for _, part := range strings.Split(header, ",") </span><span class="cov9" title="5">{
+func ExtractBucketFromTUSMetadata(header string) string <span class="cov5" title="6">{
+        for _, part := range strings.Split(header, ",") </span><span class="cov6" title="7">{
                 part = strings.TrimSpace(part)
                 kv := strings.SplitN(part, " ", 2)
-                if len(kv) == 2 &amp;&amp; kv[0] == "bucket" </span><span class="cov4" title="2">{
+                if len(kv) == 2 &amp;&amp; kv[0] == "bucket" </span><span class="cov4" title="3">{
                         decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(kv[1]))
-                        if err == nil </span><span class="cov4" title="2">{
+                        if err == nil </span><span class="cov4" title="3">{
                                 return string(decoded)
                         }</span>
                 }
         }
-        <span class="cov4" title="2">return ""</span>
+        <span class="cov4" title="3">return ""</span>
 }
 
 // FilesHandler is the main dispatcher for all /files/ routes.
@@ -1120,51 +1963,83 @@ func ExtractBucketFromTUSMetadata(header string) string <span class="cov7" title
 //        DELETE /files/&lt;bucket&gt;/&lt;key&gt;    → DeleteFileHandler
 //        POST /files/ (TUS)              → routes to per-bucket TUS handler
 //        PATCH/HEAD /files/&lt;bucket&gt;/&lt;id&gt; → routes to per-bucket TUS handler
-func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) <span class="cov0" title="0">{
+func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) <span class="cov8" title="13">{
         isTUS := r.Header.Get("Tus-Resumable") != ""
         path := r.URL.Path
 
         // ── Non-TUS: GET /files/ → list files ──────────────────────────────────
-        if r.Method == http.MethodGet &amp;&amp; path == "/files/" &amp;&amp; !isTUS </span><span class="cov0" title="0">{
+        if r.Method == http.MethodGet &amp;&amp; path == "/files/" &amp;&amp; !isTUS </span><span class="cov1" title="1">{
                 a.ListFilesHandler(w, r)
                 return
         }</span>
 
+        // ── Non-TUS: GET /files/share → generate presigned URL ─────────────────
+        <span class="cov7" title="12">if r.Method == http.MethodGet &amp;&amp; path == "/files/share" &amp;&amp; !isTUS </span><span class="cov1" title="1">{
+                a.ShareFileHandler(w, r)
+                return
+        }</span>
+
+        // ── Non-TUS: GET /files/shared-links → list shared link history ─────────
+        <span class="cov7" title="11">if r.Method == http.MethodGet &amp;&amp; path == "/files/shared-links" &amp;&amp; !isTUS </span><span class="cov1" title="1">{
+                a.ListSharedLinksHandler(w, r)
+                return
+        }</span>
+
+        // ── Non-TUS: DELETE /files/shared-links/{id} → remove shared link record ─
+        <span class="cov7" title="10">if r.Method == http.MethodDelete &amp;&amp; strings.HasPrefix(path, "/files/shared-links/") &amp;&amp; !isTUS </span><span class="cov1" title="1">{
+                id := strings.TrimPrefix(path, "/files/shared-links/")
+                a.DeleteSharedLinkHandler(w, r, id)
+                return
+        }</span>
+
         // Parse path segments after /files/
-        <span class="cov0" title="0">rest := strings.TrimPrefix(path, "/files/")
+        <span class="cov7" title="9">rest := strings.TrimPrefix(path, "/files/")
         parts := strings.SplitN(rest, "/", 2)
         hasTwoParts := len(parts) == 2 &amp;&amp; parts[0] != "" &amp;&amp; parts[1] != ""
 
         // ── Non-TUS: /files/&lt;bucket&gt;/&lt;key&gt; or /files/&lt;bucket&gt;/&lt;key&gt;/stream ─────
-        if !isTUS &amp;&amp; hasTwoParts </span><span class="cov0" title="0">{
+        if !isTUS &amp;&amp; hasTwoParts </span><span class="cov6" title="7">{
                 bucket, rawKey := parts[0], parts[1]
                 switch r.Method </span>{
-                case http.MethodGet:<span class="cov0" title="0">
-                        if key, isStream := strings.CutSuffix(rawKey, "/stream"); isStream </span><span class="cov0" title="0">{
+                case http.MethodGet:<span class="cov4" title="3">
+                        if rawKey == "trash" </span><span class="cov1" title="1">{
+                                a.ListFileTrashHandler(w, r, bucket)
+                                return
+                        }</span>
+                        <span class="cov2" title="2">if key, isStream := strings.CutSuffix(rawKey, "/stream"); isStream </span><span class="cov1" title="1">{
                                 a.StreamFileHandler(w, r, bucket, key)
                                 return
                         }</span>
-                        <span class="cov0" title="0">a.DownloadFileHandler(w, r, bucket, rawKey)
+                        <span class="cov1" title="1">a.DownloadFileHandler(w, r, bucket, rawKey)
                         return</span>
-                case http.MethodDelete:<span class="cov0" title="0">
+                case http.MethodPost:<span class="cov2" title="2">
+                        if after, ok := strings.CutPrefix(rawKey, "trash/"); ok </span><span class="cov1" title="1">{
+                                if key, ok := strings.CutSuffix(after, "/restore"); ok </span><span class="cov1" title="1">{
+                                        a.RestoreFileHandler(w, r, bucket, key)
+                                        return
+                                }</span>
+                        }
+                        <span class="cov1" title="1">http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+                        return</span>
+                case http.MethodDelete:<span class="cov1" title="1">
                         a.DeleteFileHandler(w, r, bucket, rawKey)
                         return</span>
-                default:<span class="cov0" title="0">
+                default:<span class="cov1" title="1">
                         http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
                         return</span>
                 }
         }
 
         // ── TUS: POST /files/ → create upload in user bucket ───────────────────
-        <span class="cov0" title="0">if isTUS &amp;&amp; r.Method == http.MethodPost &amp;&amp; path == "/files/" </span><span class="cov0" title="0">{
+        <span class="cov2" title="2">if isTUS &amp;&amp; r.Method == http.MethodPost &amp;&amp; path == "/files/" </span><span class="cov2" title="2">{
                 bucket := ExtractBucketFromTUSMetadata(r.Header.Get("Upload-Metadata"))
-                if bucket == "" </span><span class="cov0" title="0">{
+                if bucket == "" </span><span class="cov1" title="1">{
                         jsonError(w, "Upload-Metadata must include bucket field", http.StatusBadRequest)
                         return
                 }</span>
 
-                <span class="cov0" title="0">if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov0" title="0">{
-                        if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov0" title="0">{
+                <span class="cov1" title="1">if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+                        if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov1" title="1">{
                                 emitAudit(a, r, "file.access_denied", "/files/"+bucket, http.StatusForbidden)
                                 jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
                                 return
@@ -1203,14 +2078,14 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) <span class="
 
 // ListFilesHandler returns a JSON list of files in the specified user bucket.
 // Requires ?bucket=&lt;name&gt; query parameter.
-func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) <span class="cov7" title="4">{
+func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) <span class="cov5" title="5">{
         bucket := r.URL.Query().Get("bucket")
-        if bucket == "" </span><span class="cov1" title="1">{
+        if bucket == "" </span><span class="cov2" title="2">{
                 jsonError(w, "bucket query parameter is required", http.StatusBadRequest)
                 return
         }</span>
 
-        <span class="cov6" title="3">if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+        <span class="cov4" title="3">if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
                 if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov1" title="1">{
                         emitAudit(a, r, "file.access_denied", "/files/?bucket="+bucket, http.StatusForbidden)
                         jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
@@ -1218,7 +2093,7 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) <span cla
                 }</span>
         }
 
-        <span class="cov4" title="2">output, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+        <span class="cov2" title="2">output, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
                 Bucket: aws.String(bucket),
         })
         if err != nil </span><span class="cov1" title="1">{
@@ -1240,10 +2115,10 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) <span cla
         }
 
         files := make([]FileInfo, 0)
-        for _, obj := range output.Contents </span><span class="cov4" title="2">{
+        for _, obj := range output.Contents </span><span class="cov2" title="2">{
                 key := aws.ToString(obj.Key)
-                // Skip .info sidecar files and empty keys
-                if key == "" || strings.HasSuffix(key, ".info") </span><span class="cov1" title="1">{
+                // Skip .info sidecar files, empty keys, and files in trash
+                if key == "" || strings.HasSuffix(key, ".info") || strings.HasPrefix(key, "__trash__/") </span><span class="cov1" title="1">{
                         continue</span>
                 }
 
@@ -1294,8 +2169,8 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) <span cla
 
 // DownloadFileHandler streams a file from the user bucket to the client.
 // GET /files/&lt;bucket&gt;/&lt;key&gt;
-func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov6" title="3">{
-        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov4" title="4">{
+        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov2" title="2">{
                 if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov1" title="1">{
                         emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key, http.StatusForbidden)
                         jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
@@ -1304,7 +2179,7 @@ func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket
         }
 
         // Retrieve original filename from TUS .info sidecar (best-effort)
-        <span class="cov4" title="2">filename := key
+        <span class="cov4" title="3">filename := key
         infoObj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
                 Bucket: aws.String(bucket),
                 Key:    aws.String(key + ".info"),
@@ -1322,16 +2197,16 @@ func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket
         }
 
         // Get the actual file object
-        <span class="cov4" title="2">obj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
+        <span class="cov4" title="3">obj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
                 Bucket: aws.String(bucket),
                 Key:    aws.String(key),
         })
-        if err != nil </span><span class="cov1" title="1">{
+        if err != nil </span><span class="cov2" title="2">{
                 if isObjectNotFound(err) </span><span class="cov1" title="1">{
                         jsonError(w, "file not found", http.StatusNotFound)
                         return
                 }</span>
-                <span class="cov0" title="0">jsonError(w, fmt.Sprintf("failed to retrieve file: %v", err), http.StatusInternalServerError)
+                <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to retrieve file: %v", err), http.StatusInternalServerError)
                 return</span>
         }
         <span class="cov1" title="1">defer obj.Body.Close()
@@ -1354,8 +2229,8 @@ func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket
 
 // DeleteFileHandler deletes a file and its TUS .info sidecar from the user bucket.
 // DELETE /files/&lt;bucket&gt;/&lt;key&gt;
-func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov6" title="3">{
-        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov5" title="6">{
+        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov4" title="4">{
                 if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov1" title="1">{
                         emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key, http.StatusForbidden)
                         jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
@@ -1364,21 +2239,37 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
         }
 
         // Verify the file exists before attempting deletion
-        <span class="cov4" title="2">_, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
+        <span class="cov5" title="5">_, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
                 Bucket: aws.String(bucket),
                 Key:    aws.String(key),
         })
-        if err != nil </span><span class="cov1" title="1">{
-                if isObjectNotFound(err) </span><span class="cov1" title="1">{
+        if err != nil </span><span class="cov4" title="3">{
+                if isObjectNotFound(err) </span><span class="cov2" title="2">{
                         jsonError(w, "file not found", http.StatusNotFound)
                         return
                 }</span>
-                <span class="cov0" title="0">jsonError(w, fmt.Sprintf("failed to check file: %v", err), http.StatusInternalServerError)
+                <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to check file: %v", err), http.StatusInternalServerError)
                 return</span>
         }
 
-        // Batch-delete: file + .info sidecar
-        <span class="cov1" title="1">_, err = a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
+        // Soft delete: move file to __trash__/ prefix
+        <span class="cov2" title="2">trashKey := "__trash__/" + key
+        if _, err = a.S3Client.CopyObject(r.Context(), &amp;s3.CopyObjectInput{
+                Bucket:     aws.String(bucket),
+                CopySource: aws.String(bucket + "/" + key),
+                Key:        aws.String(trashKey),
+        }); err != nil </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("failed to move file to trash: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+        // Best-effort: copy .info sidecar to trash
+        <span class="cov1" title="1">a.S3Client.CopyObject(r.Context(), &amp;s3.CopyObjectInput{ //nolint:errcheck
+                Bucket:     aws.String(bucket),
+                CopySource: aws.String(bucket + "/" + key + ".info"),
+                Key:        aws.String(trashKey + ".info"),
+        })
+        // Delete originals
+        if _, err = a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{
                 Bucket: aws.String(bucket),
                 Delete: &amp;types.Delete{
                         Objects: []types.ObjectIdentifier{
@@ -1386,18 +2277,168 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
                                 {Key: aws.String(key + ".info")},
                         },
                 },
-        })
-        if err != nil </span><span class="cov0" title="0">{
-                jsonError(w, fmt.Sprintf("failed to delete file: %v", err), http.StatusInternalServerError)
+        }); err != nil </span><span class="cov0" title="0">{
+                jsonError(w, fmt.Sprintf("failed to remove original file: %v", err), http.StatusInternalServerError)
                 return
         }</span>
 
         <span class="cov1" title="1">w.WriteHeader(http.StatusNoContent)
-        emitAudit(a, r, "file.delete", "/files/"+bucket+"/"+key, http.StatusNoContent)</span>
+        emitAudit(a, r, "file.delete", "/files/"+bucket+"/"+key, http.StatusNoContent)
+
+        // Best-effort: remove shared link records so deleted files don't appear in the share history.
+        if a.Shares != nil </span><span class="cov0" title="0">{
+                go func() </span><span class="cov0" title="0">{
+                        if err := a.Shares.DeleteSharedLinksByFileKey(context.Background(), bucket, key); err != nil </span><span class="cov0" title="0">{
+                                log.Printf("shares: failed to cleanup shared links for deleted file %s/%s: %v", bucket, key, err)
+                        }</span>
+                }()
+        }
+}
+
+// ListFileTrashHandler lists files in the __trash__/ prefix of a user bucket.
+// GET /files/&lt;bucket&gt;/trash
+func (a *App) ListFileTrashHandler(w http.ResponseWriter, r *http.Request, bucket string) <span class="cov5" title="5">{
+        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+                if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov0" title="0">{
+                        emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/trash", http.StatusForbidden)
+                        jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+                        return
+                }</span>
+        }
+
+        <span class="cov5" title="5">output, err := a.S3Client.ListObjectsV2(r.Context(), &amp;s3.ListObjectsV2Input{
+                Bucket: aws.String(bucket),
+                Prefix: aws.String("__trash__/"),
+        })
+        if err != nil </span><span class="cov2" title="2">{
+                if isBucketNotFound(err) </span><span class="cov1" title="1">{
+                        jsonError(w, fmt.Sprintf("bucket %q not found", bucket), http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to list trash: %v", err), http.StatusInternalServerError)
+                return</span>
+        }
+
+        <span class="cov4" title="3">type TrashFileInfo struct {
+                Key       string    `json:"key"`
+                Name      string    `json:"name"`
+                Size      int64     `json:"size"`
+                DeletedAt time.Time `json:"deletedAt"`
+        }
+
+        files := make([]TrashFileInfo, 0)
+        for _, obj := range output.Contents </span><span class="cov2" title="2">{
+                trashKey := aws.ToString(obj.Key)
+                if trashKey == "" || strings.HasSuffix(trashKey, ".info") </span><span class="cov1" title="1">{
+                        continue</span>
+                }
+                <span class="cov1" title="1">originalKey := strings.TrimPrefix(trashKey, "__trash__/")
+
+                name := originalKey
+                infoObj, err := a.S3Client.GetObject(r.Context(), &amp;s3.GetObjectInput{
+                        Bucket: aws.String(bucket),
+                        Key:    aws.String(trashKey + ".info"),
+                })
+                if err == nil </span><span class="cov1" title="1">{
+                        var info struct {
+                                MetaData map[string]string `json:"MetaData"`
+                        }
+                        if jsonErr := json.NewDecoder(infoObj.Body).Decode(&amp;info); jsonErr == nil </span><span class="cov1" title="1">{
+                                if filename, ok := info.MetaData["filename"]; ok &amp;&amp; filename != "" </span><span class="cov1" title="1">{
+                                        name = filename
+                                }</span>
+                        }
+                        <span class="cov1" title="1">infoObj.Body.Close()</span>
+                }
+
+                <span class="cov1" title="1">var deletedAt time.Time
+                if obj.LastModified != nil </span><span class="cov0" title="0">{
+                        deletedAt = *obj.LastModified
+                }</span>
+
+                <span class="cov1" title="1">files = append(files, TrashFileInfo{
+                        Key:       originalKey,
+                        Name:      name,
+                        Size:      aws.ToInt64(obj.Size),
+                        DeletedAt: deletedAt,
+                })</span>
+        }
+
+        <span class="cov4" title="3">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{"data": files}) //nolint:errcheck
+        emitAudit(a, r, "file.trash.list", "/files/"+bucket+"/trash", http.StatusOK)</span>
+}
+
+// RestoreFileHandler moves a file from __trash__/ back to its original location.
+// POST /files/&lt;bucket&gt;/trash/&lt;key&gt;/restore
+func (a *App) RestoreFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov6" title="7">{
+        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+                if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov0" title="0">{
+                        emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/trash/"+key+"/restore", http.StatusForbidden)
+                        jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+                        return
+                }</span>
+        }
+
+        <span class="cov6" title="7">trashKey := "__trash__/" + key
+
+        // Verify file is in trash
+        if _, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(trashKey),
+        }); err != nil </span><span class="cov4" title="3">{
+                if isObjectNotFound(err) </span><span class="cov2" title="2">{
+                        jsonError(w, "file not found in trash", http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to check file: %v", err), http.StatusInternalServerError)
+                return</span>
+        }
+
+        // Check no conflict at original location
+        <span class="cov4" title="4">if _, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(key),
+        }); err == nil </span><span class="cov1" title="1">{
+                jsonError(w, "a file with the same name already exists", http.StatusConflict)
+                return
+        }</span> else<span class="cov4" title="3"> if !isObjectNotFound(err) </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("failed to check original location: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+
+        // Copy back to original location
+        <span class="cov2" title="2">if _, err := a.S3Client.CopyObject(r.Context(), &amp;s3.CopyObjectInput{
+                Bucket:     aws.String(bucket),
+                CopySource: aws.String(bucket + "/" + trashKey),
+                Key:        aws.String(key),
+        }); err != nil </span><span class="cov1" title="1">{
+                jsonError(w, fmt.Sprintf("failed to restore file: %v", err), http.StatusInternalServerError)
+                return
+        }</span>
+        // Best-effort: restore .info sidecar
+        <span class="cov1" title="1">a.S3Client.CopyObject(r.Context(), &amp;s3.CopyObjectInput{ //nolint:errcheck
+                Bucket:     aws.String(bucket),
+                CopySource: aws.String(bucket + "/" + trashKey + ".info"),
+                Key:        aws.String(key + ".info"),
+        })
+        // Delete trash copies
+        a.S3Client.DeleteObjects(r.Context(), &amp;s3.DeleteObjectsInput{ //nolint:errcheck
+                Bucket: aws.String(bucket),
+                Delete: &amp;types.Delete{
+                        Objects: []types.ObjectIdentifier{
+                                {Key: aws.String(trashKey)},
+                                {Key: aws.String(trashKey + ".info")},
+                        },
+                },
+        })
+
+        w.WriteHeader(http.StatusNoContent)
+        emitAudit(a, r, "file.restore", "/files/"+bucket+"/trash/"+key+"/restore", http.StatusNoContent)</span>
 }
 
 // isObjectNotFound returns true when an S3 error indicates a missing key.
-func isObjectNotFound(err error) bool <span class="cov10" title="6">{
+func isObjectNotFound(err error) bool <span class="cov8" title="17">{
         var nsk *types.NoSuchKey
         var notFound *types.NotFound
         return errors.As(err, &amp;nsk) || errors.As(err, &amp;notFound)
@@ -1410,7 +2451,236 @@ func sanitizeFilename(name string) string <span class="cov1" title="1">{
 }</span>
 </pre>
 		
-		<pre class="file" id="file8" style="display: none">package uploader
+		<pre class="file" id="file11" style="display: none">package uploader
+
+import (
+        "encoding/json"
+        "net/http"
+        "strconv"
+        "strings"
+        "time"
+
+        "github.com/aws/aws-sdk-go-v2/aws"
+        "github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+// ListSharedLinksHandler returns a paginated list of files the user has shared via link.
+// Each record includes a freshly regenerated presigned URL so the caller can copy/use it.
+//
+// GET /files/shared-links?page=1&amp;limit=20
+func (a *App) ListSharedLinksHandler(w http.ResponseWriter, r *http.Request) <span class="cov9" title="6">{
+        claims, ok := ClaimsFromContext(r.Context())
+        if !ok </span><span class="cov1" title="1">{
+                jsonError(w, "unauthorized", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="5">if a.Shares == nil </span><span class="cov4" title="2">{
+                jsonError(w, "sharing feature is disabled", http.StatusServiceUnavailable)
+                return
+        }</span>
+
+        <span class="cov6" title="3">page, err := strconv.Atoi(r.URL.Query().Get("page"))
+        if err != nil || page &lt; 1 </span><span class="cov4" title="2">{
+                page = 1
+        }</span>
+        <span class="cov6" title="3">limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+        if err != nil || limit &lt; 1 || limit &gt; 100 </span><span class="cov4" title="2">{
+                limit = 20
+        }</span>
+
+        <span class="cov6" title="3">result, err := a.Shares.ListSharedLinks(r.Context(), claims.Subject, page, limit)
+        if err != nil </span><span class="cov1" title="1">{
+                jsonError(w, "failed to list shared links", http.StatusInternalServerError)
+                return
+        }</span>
+
+        // Enrich each record with a freshly generated presigned URL and an expired flag.
+        <span class="cov4" title="2">type SharedLinkResponse struct {
+                ID        string    `json:"id"`
+                Bucket    string    `json:"bucket"`
+                FileKey   string    `json:"fileKey"`
+                URL       string    `json:"url"`
+                ExpiresAt time.Time `json:"expiresAt"`
+                CreatedAt time.Time `json:"createdAt"`
+                Expired   bool      `json:"expired"`
+        }
+
+        now := time.Now().UTC()
+        items := make([]SharedLinkResponse, 0, len(result.Data))
+        for _, rec := range result.Data </span><span class="cov4" title="2">{
+                item := SharedLinkResponse{
+                        ID:        rec.ID,
+                        Bucket:    rec.Bucket,
+                        FileKey:   rec.FileKey,
+                        ExpiresAt: rec.ExpiresAt,
+                        CreatedAt: rec.CreatedAt,
+                        Expired:   now.After(rec.ExpiresAt),
+                }
+                // Only regenerate URL for non-expired links; presigning an already-expired link
+                // would produce a URL that fails immediately.
+                if !item.Expired &amp;&amp; a.Presigner != nil </span><span class="cov0" title="0">{
+                        remaining := rec.ExpiresAt.Sub(now)
+                        if remaining &gt; maxPresignExpiry </span><span class="cov0" title="0">{
+                                remaining = maxPresignExpiry
+                        }</span>
+                        <span class="cov0" title="0">presigned, presignErr := a.Presigner.PresignGetObject(r.Context(), &amp;s3.GetObjectInput{
+                                Bucket: aws.String(rec.Bucket),
+                                Key:    aws.String(rec.FileKey),
+                        }, s3.WithPresignExpires(remaining))
+                        if presignErr == nil </span><span class="cov0" title="0">{
+                                item.URL = presigned.URL
+                        }</span>
+                }
+                <span class="cov4" title="2">items = append(items, item)</span>
+        }
+
+        <span class="cov4" title="2">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+                "data":  items,
+                "total": result.Total,
+                "page":  result.Page,
+                "limit": result.Limit,
+        })</span>
+}
+
+// DeleteSharedLinkHandler removes a shared-link record from the history.
+// Note: this does NOT invalidate the presigned URL itself — if not yet expired it remains valid.
+//
+// DELETE /files/shared-links/{id}
+func (a *App) DeleteSharedLinkHandler(w http.ResponseWriter, r *http.Request, id string) <span class="cov10" title="7">{
+        claims, ok := ClaimsFromContext(r.Context())
+        if !ok </span><span class="cov1" title="1">{
+                jsonError(w, "unauthorized", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov9" title="6">if a.Shares == nil </span><span class="cov4" title="2">{
+                jsonError(w, "sharing feature is disabled", http.StatusServiceUnavailable)
+                return
+        }</span>
+
+        <span class="cov7" title="4">id = strings.TrimSpace(id)
+        if id == "" </span><span class="cov1" title="1">{
+                jsonError(w, "id is required", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov6" title="3">if err := a.Shares.DeleteSharedLink(r.Context(), id, claims.Subject); err != nil </span><span class="cov4" title="2">{
+                if strings.Contains(err.Error(), "not found") </span><span class="cov1" title="1">{
+                        jsonError(w, "shared link not found", http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov1" title="1">jsonError(w, "failed to delete shared link", http.StatusInternalServerError)
+                return</span>
+        }
+
+        <span class="cov1" title="1">w.WriteHeader(http.StatusNoContent)</span>
+}
+</pre>
+		
+		<pre class="file" id="file12" style="display: none">package uploader
+
+import (
+        "context"
+        "encoding/json"
+        "log"
+        "net/http"
+        "time"
+
+        "github.com/aws/aws-sdk-go-v2/aws"
+        v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+        "github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+const maxPresignExpiry = 7 * 24 * time.Hour
+
+// Presigner generates presigned S3/MinIO GET URLs.
+type Presigner interface {
+        PresignGetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+}
+
+// ShareFileHandler generates a temporary presigned download URL for a single file.
+// The URL is public — anyone with the link can download without logging in.
+//
+//        GET /files/share?bucket=x&amp;file=y&amp;expiry=24h
+//
+// expiry: Go duration string (e.g. "1h", "24h", "168h"). Default: 168h (7 days, MinIO max).
+// Returns: { "url": "&lt;presigned-url&gt;", "expiresAt": "&lt;RFC3339&gt;" }
+func (a *App) ShareFileHandler(w http.ResponseWriter, r *http.Request) <span class="cov10" title="11">{
+        bucket := r.URL.Query().Get("bucket")
+        file := r.URL.Query().Get("file")
+        if bucket == "" || file == "" </span><span class="cov5" title="3">{
+                jsonError(w, "bucket and file query parameters are required", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="8">if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov8" title="8">{
+                if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov1" title="1">{
+                        emitAudit(a, r, "file.access_denied", "/files/share?bucket="+bucket+"&amp;file="+file, http.StatusForbidden)
+                        jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
+                        return
+                }</span>
+        }
+
+        <span class="cov8" title="7">expiry := maxPresignExpiry
+        if expiryStr := r.URL.Query().Get("expiry"); expiryStr != "" </span><span class="cov5" title="3">{
+                d, err := time.ParseDuration(expiryStr)
+                if err != nil || d &lt;= 0 </span><span class="cov3" title="2">{
+                        jsonError(w, "invalid expiry: use Go duration syntax e.g. 1h, 24h, 168h", http.StatusBadRequest)
+                        return
+                }</span>
+                <span class="cov1" title="1">if d &gt; maxPresignExpiry </span><span class="cov0" title="0">{
+                        d = maxPresignExpiry
+                }</span>
+                <span class="cov1" title="1">expiry = d</span>
+        }
+
+        // Verify file exists before generating presigned URL.
+        <span class="cov7" title="5">_, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(file),
+        })
+        if err != nil </span><span class="cov1" title="1">{
+                if isObjectNotFound(err) </span><span class="cov1" title="1">{
+                        jsonError(w, "file not found", http.StatusNotFound)
+                        return
+                }</span>
+                <span class="cov0" title="0">jsonError(w, "failed to check file", http.StatusInternalServerError)
+                return</span>
+        }
+
+        <span class="cov6" title="4">req, err := a.Presigner.PresignGetObject(r.Context(), &amp;s3.GetObjectInput{
+                Bucket: aws.String(bucket),
+                Key:    aws.String(file),
+        }, s3.WithPresignExpires(expiry))
+        if err != nil </span><span class="cov1" title="1">{
+                jsonError(w, "failed to generate share link", http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov5" title="3">expiresAt := time.Now().UTC().Add(expiry)
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+                "url":       req.URL,
+                "expiresAt": expiresAt.Format(time.RFC3339),
+        })
+        emitAudit(a, r, "file.share", "/files/share?bucket="+bucket+"&amp;file="+file, http.StatusOK)
+
+        // Persist the shared link record for the history dashboard (fire-and-forget).
+        if a.Shares != nil </span><span class="cov0" title="0">{
+                if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov0" title="0">{
+                        go func() </span><span class="cov0" title="0">{
+                                if err := a.Shares.CreateSharedLink(context.Background(), claims.Subject, bucket, file, expiresAt); err != nil </span><span class="cov0" title="0">{
+                                        log.Printf("shares: failed to persist shared link record: %v", err)
+                                }</span>
+                        }()
+                }
+        }
+}
+</pre>
+		
+		<pre class="file" id="file13" style="display: none">package uploader
 
 import (
         "encoding/json"
@@ -1425,7 +2695,7 @@ import (
 //        GET    /buckets/{name}/shares           → list who has access to {name}
 //        POST   /buckets/{name}/shares           → grant access to a user
 //        DELETE /buckets/{name}/shares/{sharee}  → revoke access from a user
-func (a *App) SharesItemHandler(w http.ResponseWriter, r *http.Request) <span class="cov0" title="0">{
+func (a *App) SharesItemHandler(w http.ResponseWriter, r *http.Request) <span class="cov10" title="15">{
         // Path: /buckets/{name}/shares or /buckets/{name}/shares/{sharee}
         rest := strings.TrimPrefix(r.URL.Path, "/buckets/")
         parts := strings.SplitN(rest, "/shares", 2)
@@ -1433,81 +2703,81 @@ func (a *App) SharesItemHandler(w http.ResponseWriter, r *http.Request) <span cl
                 jsonError(w, "invalid path", http.StatusBadRequest)
                 return
         }</span>
-        <span class="cov0" title="0">bucket := strings.Trim(parts[0], "/")
+        <span class="cov10" title="15">bucket := strings.Trim(parts[0], "/")
         shareeSegment := strings.Trim(parts[1], "/")
 
-        if bucket == "" </span><span class="cov0" title="0">{
+        if bucket == "" </span><span class="cov1" title="1">{
                 jsonError(w, "bucket name is required", http.StatusBadRequest)
                 return
         }</span>
 
         // Only bucket owners can manage shares.
-        <span class="cov0" title="0">claims, hasClaims := ClaimsFromContext(r.Context())
-        if hasClaims &amp;&amp; !claims.OwnsBucket(bucket) </span><span class="cov0" title="0">{
+        <span class="cov9" title="14">claims, hasClaims := ClaimsFromContext(r.Context())
+        if hasClaims &amp;&amp; !claims.OwnsBucket(bucket) </span><span class="cov1" title="1">{
                 jsonError(w, "only the bucket owner can manage shares", http.StatusForbidden)
                 return
         }</span>
 
-        <span class="cov0" title="0">if a.Shares == nil </span><span class="cov0" title="0">{
+        <span class="cov9" title="13">if a.Shares == nil </span><span class="cov3" title="2">{
                 jsonError(w, "sharing feature is not configured (GO_SHARES_URL not set)", http.StatusServiceUnavailable)
                 return
         }</span>
 
-        <span class="cov0" title="0">switch </span>{
-        case r.Method == http.MethodGet &amp;&amp; shareeSegment == "":<span class="cov0" title="0">
+        <span class="cov8" title="11">switch </span>{
+        case r.Method == http.MethodGet &amp;&amp; shareeSegment == "":<span class="cov3" title="2">
                 a.handleListShares(w, r, bucket)</span>
-        case r.Method == http.MethodPost &amp;&amp; shareeSegment == "":<span class="cov0" title="0">
+        case r.Method == http.MethodPost &amp;&amp; shareeSegment == "":<span class="cov6" title="5">
                 a.handleCreateShare(w, r, bucket, claims)</span>
-        case r.Method == http.MethodDelete &amp;&amp; shareeSegment != "":<span class="cov0" title="0">
+        case r.Method == http.MethodDelete &amp;&amp; shareeSegment != "":<span class="cov4" title="3">
                 a.handleDeleteShare(w, r, bucket, shareeSegment)</span>
-        default:<span class="cov0" title="0">
+        default:<span class="cov1" title="1">
                 jsonError(w, "method not allowed", http.StatusMethodNotAllowed)</span>
         }
 }
 
 // handleListShares handles GET /buckets/{bucket}/shares.
-func (a *App) handleListShares(w http.ResponseWriter, r *http.Request, bucket string) <span class="cov0" title="0">{
+func (a *App) handleListShares(w http.ResponseWriter, r *http.Request, bucket string) <span class="cov3" title="2">{
         shares, err := a.Shares.GetSharesForBucket(r.Context(), bucket)
-        if err != nil </span><span class="cov0" title="0">{
+        if err != nil </span><span class="cov1" title="1">{
                 jsonError(w, "failed to list shares", http.StatusInternalServerError)
                 return
         }</span>
 
-        <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+        <span class="cov1" title="1">w.Header().Set("Content-Type", "application/json")
         json.NewEncoder(w).Encode(map[string]interface{}{"data": shares})</span> //nolint:errcheck
 }
 
 // handleCreateShare handles POST /buckets/{bucket}/shares.
 // Body: { "shareeEmail": "rosa@example.com", "permission": "read" | "write" }
-func (a *App) handleCreateShare(w http.ResponseWriter, r *http.Request, bucket string, claims *Claims) <span class="cov0" title="0">{
+func (a *App) handleCreateShare(w http.ResponseWriter, r *http.Request, bucket string, claims *Claims) <span class="cov6" title="5">{
         var body struct {
                 ShareeEmail string `json:"shareeEmail"`
                 Permission  string `json:"permission"`
         }
-        if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
+        if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil </span><span class="cov1" title="1">{
                 jsonError(w, "invalid JSON body", http.StatusBadRequest)
                 return
         }</span>
-        <span class="cov0" title="0">if body.ShareeEmail == "" </span><span class="cov0" title="0">{
+        <span class="cov5" title="4">if body.ShareeEmail == "" </span><span class="cov1" title="1">{
                 jsonError(w, "shareeEmail is required", http.StatusBadRequest)
                 return
         }</span>
-        <span class="cov0" title="0">if body.Permission == "" </span><span class="cov0" title="0">{
+        <span class="cov4" title="3">if body.Permission == "" </span><span class="cov0" title="0">{
                 body.Permission = "read"
         }</span>
-        <span class="cov0" title="0">if body.Permission != "read" &amp;&amp; body.Permission != "write" </span><span class="cov0" title="0">{
+        <span class="cov4" title="3">if body.Permission != "read" &amp;&amp; body.Permission != "write" </span><span class="cov1" title="1">{
                 jsonError(w, "permission must be 'read' or 'write'", http.StatusBadRequest)
                 return
         }</span>
 
-        <span class="cov0" title="0">ownerID := ""
-        if claims != nil </span><span class="cov0" title="0">{
+        <span class="cov3" title="2">ownerID := ""
+        if claims != nil </span><span class="cov3" title="2">{
                 ownerID = claims.Subject
         }</span>
 
-        <span class="cov0" title="0">result, err := a.Shares.CreateShare(r.Context(), ownerID, bucket, body.ShareeEmail, body.Permission)
-        if err != nil </span><span class="cov0" title="0">{
-                if strings.Contains(err.Error(), "already exists") </span><span class="cov0" title="0">{
+        <span class="cov3" title="2">result, err := a.Shares.CreateShare(r.Context(), ownerID, bucket, body.ShareeEmail, body.Permission)
+        if err != nil </span><span class="cov1" title="1">{
+                if strings.Contains(err.Error(), "already exists") </span><span class="cov1" title="1">{
                         jsonError(w, "share already exists", http.StatusConflict)
                         return
                 }</span>
@@ -1515,34 +2785,35 @@ func (a *App) handleCreateShare(w http.ResponseWriter, r *http.Request, bucket s
                 return</span>
         }
 
-        <span class="cov0" title="0">emitAudit(a, r, "bucket.share.create", "/buckets/"+bucket+"/shares", http.StatusCreated)
+        <span class="cov1" title="1">emitAudit(a, r, "bucket.share.create", "/buckets/"+bucket+"/shares", http.StatusCreated)
         w.Header().Set("Content-Type", "application/json")
         w.WriteHeader(http.StatusCreated)
         json.NewEncoder(w).Encode(result)</span> //nolint:errcheck
 }
 
 // handleDeleteShare handles DELETE /buckets/{bucket}/shares/{shareeEmail}.
-func (a *App) handleDeleteShare(w http.ResponseWriter, r *http.Request, bucket, shareeEmail string) <span class="cov0" title="0">{
-        if err := a.Shares.DeleteShare(r.Context(), bucket, shareeEmail); err != nil </span><span class="cov0" title="0">{
-                if strings.Contains(err.Error(), "not found") </span><span class="cov0" title="0">{
+func (a *App) handleDeleteShare(w http.ResponseWriter, r *http.Request, bucket, shareeEmail string) <span class="cov4" title="3">{
+        if err := a.Shares.DeleteShare(r.Context(), bucket, shareeEmail); err != nil </span><span class="cov3" title="2">{
+                if strings.Contains(err.Error(), "not found") </span><span class="cov1" title="1">{
                         jsonError(w, "share not found", http.StatusNotFound)
                         return
                 }</span>
-                <span class="cov0" title="0">jsonError(w, "failed to delete share", http.StatusInternalServerError)
+                <span class="cov1" title="1">jsonError(w, "failed to delete share", http.StatusInternalServerError)
                 return</span>
         }
 
-        <span class="cov0" title="0">emitAudit(a, r, "bucket.share.delete", "/buckets/"+bucket+"/shares/"+shareeEmail, http.StatusNoContent)
+        <span class="cov1" title="1">emitAudit(a, r, "bucket.share.delete", "/buckets/"+bucket+"/shares/"+shareeEmail, http.StatusNoContent)
         w.WriteHeader(http.StatusNoContent)</span>
 }
 </pre>
 		
-		<pre class="file" id="file9" style="display: none">package uploader
+		<pre class="file" id="file14" style="display: none">package uploader
 
 import (
         "context"
         "encoding/json"
         "fmt"
+        "log"
         "net/http"
         "net/url"
         "strings"
@@ -1568,7 +2839,7 @@ type sharesCacheEntry struct {
 const sharesCacheTTL = 30 * time.Second
 
 // NewSharesClient creates a SharesClient pointing at the given go-shares base URL.
-func NewSharesClient(baseURL, secret string) *SharesClient <span class="cov0" title="0">{
+func NewSharesClient(baseURL, secret string) *SharesClient <span class="cov10" title="74">{
         return &amp;SharesClient{
                 baseURL:    baseURL,
                 secret:     secret,
@@ -1578,17 +2849,17 @@ func NewSharesClient(baseURL, secret string) *SharesClient <span class="cov0" ti
 
 // CanAccess returns true if shareeID has share-based access to bucket.
 // Results are cached for sharesCacheTTL to avoid per-request HTTP calls.
-func (s *SharesClient) CanAccess(ctx context.Context, bucket, shareeID string) (bool, error) <span class="cov0" title="0">{
+func (s *SharesClient) CanAccess(ctx context.Context, bucket, shareeID string) (bool, error) <span class="cov5" title="8">{
         cacheKey := bucket + "\x00" + shareeID
 
-        if v, ok := s.cache.Load(cacheKey); ok </span><span class="cov0" title="0">{
+        if v, ok := s.cache.Load(cacheKey); ok </span><span class="cov1" title="1">{
                 e := v.(sharesCacheEntry)
-                if time.Now().Before(e.expiresAt) </span><span class="cov0" title="0">{
+                if time.Now().Before(e.expiresAt) </span><span class="cov1" title="1">{
                         return e.hasAccess, nil
                 }</span>
         }
 
-        <span class="cov0" title="0">endpoint := fmt.Sprintf("%s/internal/shares/check?bucket=%s&amp;sharee=%s",
+        <span class="cov5" title="7">endpoint := fmt.Sprintf("%s/internal/shares/check?bucket=%s&amp;sharee=%s",
                 s.baseURL,
                 url.QueryEscape(bucket),
                 url.QueryEscape(shareeID),
@@ -1598,13 +2869,13 @@ func (s *SharesClient) CanAccess(ctx context.Context, bucket, shareeID string) (
         if err != nil </span><span class="cov0" title="0">{
                 return false, err
         }</span>
-        <span class="cov0" title="0">req.Header.Set("X-Internal-Secret", s.secret)
+        <span class="cov5" title="7">req.Header.Set("X-Internal-Secret", s.secret)
 
         resp, err := s.httpClient.Do(req)
         if err != nil </span><span class="cov0" title="0">{
                 return false, err
         }</span>
-        <span class="cov0" title="0">defer resp.Body.Close()
+        <span class="cov5" title="7">defer resp.Body.Close()
 
         hasAccess := resp.StatusCode == http.StatusOK
 
@@ -1624,47 +2895,47 @@ func (s *SharesClient) CanAccess(ctx context.Context, bucket, shareeID string) (
 }
 
 // InvalidateCache removes cached entries for a specific bucket (e.g. after unshare).
-func (s *SharesClient) InvalidateCache(bucket string) <span class="cov0" title="0">{
-        s.cache.Range(func(k, _ interface{}) bool </span><span class="cov0" title="0">{
-                if key, ok := k.(string); ok </span><span class="cov0" title="0">{
-                        if len(key) &gt; len(bucket) &amp;&amp; key[:len(bucket)] == bucket </span><span class="cov0" title="0">{
+func (s *SharesClient) InvalidateCache(bucket string) <span class="cov5" title="8">{
+        s.cache.Range(func(k, _ interface{}) bool </span><span class="cov1" title="1">{
+                if key, ok := k.(string); ok </span><span class="cov1" title="1">{
+                        if len(key) &gt; len(bucket) &amp;&amp; key[:len(bucket)] == bucket </span><span class="cov1" title="1">{
                                 s.cache.Delete(k)
                         }</span>
                 }
-                <span class="cov0" title="0">return true</span>
+                <span class="cov1" title="1">return true</span>
         })
 }
 
 // GetSharesForBucket calls go-shares and returns a list of shares for a given bucket.
-func (s *SharesClient) GetSharesForBucket(ctx context.Context, bucket string) ([]map[string]interface{}, error) <span class="cov0" title="0">{
+func (s *SharesClient) GetSharesForBucket(ctx context.Context, bucket string) ([]map[string]interface{}, error) <span class="cov3" title="4">{
         endpoint := fmt.Sprintf("%s/internal/shares?bucket=%s", s.baseURL, url.QueryEscape(bucket))
 
         req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">req.Header.Set("X-Internal-Secret", s.secret)
+        <span class="cov3" title="4">req.Header.Set("X-Internal-Secret", s.secret)
 
         resp, err := s.httpClient.Do(req)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">defer resp.Body.Close()
+        <span class="cov3" title="4">defer resp.Body.Close()
 
         var body struct {
                 Data []map[string]interface{} `json:"data"`
         }
-        if err := json.NewDecoder(resp.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
+        if err := json.NewDecoder(resp.Body).Decode(&amp;body); err != nil </span><span class="cov1" title="1">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">if body.Data == nil </span><span class="cov0" title="0">{
+        <span class="cov3" title="3">if body.Data == nil </span><span class="cov1" title="1">{
                 body.Data = []map[string]interface{}{}
         }</span>
-        <span class="cov0" title="0">return body.Data, nil</span>
+        <span class="cov3" title="3">return body.Data, nil</span>
 }
 
 // CreateShare calls go-shares to create a new share record.
-func (s *SharesClient) CreateShare(ctx context.Context, ownerUserID, ownerBucket, shareeUserID, permission string) (map[string]interface{}, error) <span class="cov0" title="0">{
+func (s *SharesClient) CreateShare(ctx context.Context, ownerUserID, ownerBucket, shareeUserID, permission string) (map[string]interface{}, error) <span class="cov4" title="5">{
         payload := fmt.Sprintf(
                 `{"ownerUserId":%q,"ownerBucket":%q,"shareeUserId":%q,"permission":%q}`,
                 ownerUserID, ownerBucket, shareeUserID, permission,
@@ -1677,29 +2948,29 @@ func (s *SharesClient) CreateShare(ctx context.Context, ownerUserID, ownerBucket
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">req.Header.Set("Content-Type", "application/json")
+        <span class="cov4" title="5">req.Header.Set("Content-Type", "application/json")
         req.Header.Set("X-Internal-Secret", s.secret)
 
         resp, err := s.httpClient.Do(req)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">defer resp.Body.Close()
+        <span class="cov4" title="5">defer resp.Body.Close()
 
-        if resp.StatusCode == http.StatusConflict </span><span class="cov0" title="0">{
+        if resp.StatusCode == http.StatusConflict </span><span class="cov2" title="2">{
                 return nil, fmt.Errorf("share already exists")
         }</span>
-        <span class="cov0" title="0">if resp.StatusCode != http.StatusCreated </span><span class="cov0" title="0">{
+        <span class="cov3" title="3">if resp.StatusCode != http.StatusCreated </span><span class="cov1" title="1">{
                 return nil, fmt.Errorf("go-shares returned %d", resp.StatusCode)
         }</span>
 
-        <span class="cov0" title="0">var result map[string]interface{}
+        <span class="cov2" title="2">var result map[string]interface{}
         json.NewDecoder(resp.Body).Decode(&amp;result) //nolint:errcheck
         return result, nil</span>
 }
 
 // DeleteShare calls go-shares to remove a share record.
-func (s *SharesClient) DeleteShare(ctx context.Context, bucket, shareeUserID string) error <span class="cov0" title="0">{
+func (s *SharesClient) DeleteShare(ctx context.Context, bucket, shareeUserID string) error <span class="cov4" title="5">{
         endpoint := fmt.Sprintf("%s/internal/shares?bucket=%s&amp;sharee=%s",
                 s.baseURL,
                 url.QueryEscape(bucket),
@@ -1710,40 +2981,40 @@ func (s *SharesClient) DeleteShare(ctx context.Context, bucket, shareeUserID str
         if err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
-        <span class="cov0" title="0">req.Header.Set("X-Internal-Secret", s.secret)
+        <span class="cov4" title="5">req.Header.Set("X-Internal-Secret", s.secret)
 
         resp, err := s.httpClient.Do(req)
         if err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
-        <span class="cov0" title="0">defer resp.Body.Close()
+        <span class="cov4" title="5">defer resp.Body.Close()
 
-        if resp.StatusCode == http.StatusNotFound </span><span class="cov0" title="0">{
+        if resp.StatusCode == http.StatusNotFound </span><span class="cov2" title="2">{
                 return fmt.Errorf("share not found")
         }</span>
-        <span class="cov0" title="0">if resp.StatusCode != http.StatusNoContent </span><span class="cov0" title="0">{
+        <span class="cov3" title="3">if resp.StatusCode != http.StatusNoContent </span><span class="cov1" title="1">{
                 return fmt.Errorf("go-shares returned %d", resp.StatusCode)
         }</span>
 
-        <span class="cov0" title="0">s.InvalidateCache(bucket)
+        <span class="cov2" title="2">s.InvalidateCache(bucket)
         return nil</span>
 }
 
 // GetSharedBuckets returns all buckets shared with the given sharee.
-func (s *SharesClient) GetSharedBuckets(ctx context.Context, shareeID string) ([]map[string]interface{}, error) <span class="cov0" title="0">{
+func (s *SharesClient) GetSharedBuckets(ctx context.Context, shareeID string) ([]map[string]interface{}, error) <span class="cov3" title="3">{
         endpoint := fmt.Sprintf("%s/internal/shares?sharee=%s", s.baseURL, url.QueryEscape(shareeID))
 
         req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">req.Header.Set("X-Internal-Secret", s.secret)
+        <span class="cov3" title="3">req.Header.Set("X-Internal-Secret", s.secret)
 
         resp, err := s.httpClient.Do(req)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">defer resp.Body.Close()
+        <span class="cov3" title="3">defer resp.Body.Close()
 
         var body struct {
                 Data []map[string]interface{} `json:"data"`
@@ -1751,17 +3022,350 @@ func (s *SharesClient) GetSharedBuckets(ctx context.Context, shareeID string) ([
         if err := json.NewDecoder(resp.Body).Decode(&amp;body); err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
-        <span class="cov0" title="0">if body.Data == nil </span><span class="cov0" title="0">{
+        <span class="cov3" title="3">if body.Data == nil </span><span class="cov0" title="0">{
                 body.Data = []map[string]interface{}{}
         }</span>
-        <span class="cov0" title="0">return body.Data, nil</span>
+        <span class="cov3" title="3">return body.Data, nil</span>
+}
+
+// DeleteSharesForBucket calls go-shares to cascade-delete all shares for a bucket.
+// Called when a bucket is deleted to prevent stale shares from reappearing on recreation.
+func (s *SharesClient) DeleteSharesForBucket(ctx context.Context, bucket string) error <span class="cov3" title="4">{
+        endpoint := fmt.Sprintf("%s/internal/shares/bucket/%s", s.baseURL, url.PathEscape(bucket))
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="4">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="4">defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK </span><span class="cov3" title="3">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov1" title="1">s.InvalidateCache(bucket)
+        return nil</span>
+}
+
+// IsBucketDeleted checks whether a bucket is soft-deleted (in trash).
+// Result is cached for sharesCacheTTL to avoid per-request HTTP calls.
+func (s *SharesClient) IsBucketDeleted(ctx context.Context, bucket string) (bool, error) <span class="cov5" title="7">{
+        cacheKey := bucket + "\x00__deleted__"
+        if v, ok := s.cache.Load(cacheKey); ok </span><span class="cov1" title="1">{
+                e := v.(sharesCacheEntry)
+                if time.Now().Before(e.expiresAt) </span><span class="cov1" title="1">{
+                        return e.hasAccess, nil
+                }</span>
+        }
+
+        <span class="cov4" title="6">endpoint := fmt.Sprintf("%s/internal/buckets/%s/deleted", s.baseURL, url.PathEscape(bucket))
+        req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return false, err
+        }</span>
+        <span class="cov4" title="6">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return false, err
+        }</span>
+        <span class="cov4" title="6">defer resp.Body.Close()
+
+        var body struct {
+                Deleted bool `json:"deleted"`
+        }
+        json.NewDecoder(resp.Body).Decode(&amp;body) //nolint:errcheck
+
+        s.cache.Store(cacheKey, sharesCacheEntry{
+                hasAccess: body.Deleted,
+                expiresAt: time.Now().Add(sharesCacheTTL),
+        })
+
+        return body.Deleted, nil</span>
+}
+
+// TrashBucket soft-deletes a bucket by calling go-shares.
+func (s *SharesClient) TrashBucket(ctx context.Context, bucketName, ownerUserID string, retentionDays int) error <span class="cov3" title="4">{
+        payload := fmt.Sprintf(`{"bucketName":%q,"ownerUserId":%q,"retentionDays":%d}`,
+                bucketName, ownerUserID, retentionDays)
+        req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+                s.baseURL+"/internal/buckets/trash",
+                jsonReader(payload),
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="4">req.Header.Set("Content-Type", "application/json")
+        req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="4">defer resp.Body.Close()
+
+        if resp.StatusCode == http.StatusConflict </span><span class="cov1" title="1">{
+                return fmt.Errorf("bucket is already in trash")
+        }</span>
+        <span class="cov3" title="3">if resp.StatusCode != http.StatusCreated </span><span class="cov1" title="1">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov2" title="2">s.InvalidateCache(bucketName)
+        return nil</span>
+}
+
+// RestoreBucket removes a bucket from trash in go-shares.
+func (s *SharesClient) RestoreBucket(ctx context.Context, bucketName string) error <span class="cov4" title="5">{
+        endpoint := fmt.Sprintf("%s/internal/buckets/trash/%s", s.baseURL, url.PathEscape(bucketName))
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="5">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="5">defer resp.Body.Close()
+
+        if resp.StatusCode == http.StatusNotFound </span><span class="cov2" title="2">{
+                return fmt.Errorf("bucket not found in trash")
+        }</span>
+        <span class="cov3" title="3">if resp.StatusCode != http.StatusNoContent </span><span class="cov1" title="1">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov2" title="2">s.InvalidateCache(bucketName)
+        return nil</span>
+}
+
+// GetTrashedBuckets returns all trashed buckets for a given owner.
+func (s *SharesClient) GetTrashedBuckets(ctx context.Context, ownerUserID string) ([]map[string]interface{}, error) <span class="cov4" title="5">{
+        endpoint := fmt.Sprintf("%s/internal/buckets/trash?ownerUserId=%s", s.baseURL, url.QueryEscape(ownerUserID))
+        req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov4" title="5">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov4" title="5">defer resp.Body.Close()
+
+        var body struct {
+                Data []map[string]interface{} `json:"data"`
+        }
+        if err := json.NewDecoder(resp.Body).Decode(&amp;body); err != nil </span><span class="cov1" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov3" title="4">if body.Data == nil </span><span class="cov0" title="0">{
+                body.Data = []map[string]interface{}{}
+        }</span>
+        <span class="cov3" title="4">return body.Data, nil</span>
+}
+
+// PurgeBucketRecord removes the deleted_buckets DB record after a hard delete.
+func (s *SharesClient) PurgeBucketRecord(ctx context.Context, bucketName string) error <span class="cov3" title="4">{
+        endpoint := fmt.Sprintf("%s/internal/buckets/trash/%s/purge", s.baseURL, url.PathEscape(bucketName))
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="4">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="4">defer resp.Body.Close()
+
+        if resp.StatusCode == http.StatusNotFound </span><span class="cov1" title="1">{
+                return fmt.Errorf("bucket record not found")
+        }</span>
+        <span class="cov3" title="3">if resp.StatusCode != http.StatusNoContent </span><span class="cov0" title="0">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov3" title="3">return nil</span>
+}
+
+// DeleteUserShares removes all share records involving a user — both shares they own and
+// shares they have been given. Requires two calls because owner_user_id stores a Keycloak
+// UUID while sharee_user_id stores an email address.
+// Best-effort: errors are logged but never returned so account deletion is not blocked.
+func (s *SharesClient) DeleteUserShares(ctx context.Context, userID, email string) <span class="cov3" title="3">{
+        if err := s.deleteUserByIdentifier(ctx, userID); err != nil </span><span class="cov1" title="1">{
+                log.Printf("shares: delete owner-side shares for %s: %v", userID, err)
+        }</span>
+        <span class="cov3" title="3">if err := s.deleteUserByIdentifier(ctx, email); err != nil </span><span class="cov1" title="1">{
+                log.Printf("shares: delete sharee-side shares for %s: %v", email, err)
+        }</span>
+}
+
+func (s *SharesClient) deleteUserByIdentifier(ctx context.Context, identifier string) error <span class="cov4" title="6">{
+        endpoint := fmt.Sprintf("%s/internal/shares/user/%s", s.baseURL, url.PathEscape(identifier))
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="6">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov4" title="6">defer resp.Body.Close() //nolint:errcheck
+
+        if resp.StatusCode != http.StatusOK </span><span class="cov2" title="2">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov3" title="4">return nil</span>
+}
+
+// SharedLinkRecord is a file-link record returned by go-shares.
+type SharedLinkRecord struct {
+        ID          string    `json:"id"`
+        OwnerUserID string    `json:"ownerUserId"`
+        Bucket      string    `json:"bucket"`
+        FileKey     string    `json:"fileKey"`
+        ExpiresAt   time.Time `json:"expiresAt"`
+        CreatedAt   time.Time `json:"createdAt"`
+}
+
+// SharedLinksPage is a paginated response from go-shares.
+type SharedLinksPage struct {
+        Data  []SharedLinkRecord `json:"data"`
+        Total int                `json:"total"`
+        Page  int                `json:"page"`
+        Limit int                `json:"limit"`
+}
+
+// CreateSharedLink persists a shared-link record in go-shares.
+// Fire-and-forget: caller should log errors but never block on this.
+func (s *SharesClient) CreateSharedLink(ctx context.Context, ownerUserID, bucket, fileKey string, expiresAt time.Time) error <span class="cov2" title="2">{
+        payload := fmt.Sprintf(
+                `{"ownerUserId":%q,"bucket":%q,"fileKey":%q,"expiresAt":%q}`,
+                ownerUserID, bucket, fileKey, expiresAt.UTC().Format(time.RFC3339),
+        )
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+                s.baseURL+"/internal/shared-links",
+                jsonReader(payload),
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov2" title="2">req.Header.Set("Content-Type", "application/json")
+        req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov2" title="2">defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusCreated </span><span class="cov1" title="1">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+// ListSharedLinks returns paginated shared-link records for an owner from go-shares.
+func (s *SharesClient) ListSharedLinks(ctx context.Context, ownerUserID string, page, limit int) (*SharedLinksPage, error) <span class="cov3" title="3">{
+        endpoint := fmt.Sprintf("%s/internal/shared-links?ownerUserId=%s&amp;page=%d&amp;limit=%d",
+                s.baseURL, url.QueryEscape(ownerUserID), page, limit)
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov3" title="3">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov3" title="3">defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov3" title="3">var result SharedLinksPage
+        if err := json.NewDecoder(resp.Body).Decode(&amp;result); err != nil </span><span class="cov1" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov2" title="2">if result.Data == nil </span><span class="cov0" title="0">{
+                result.Data = []SharedLinkRecord{}
+        }</span>
+        <span class="cov2" title="2">return &amp;result, nil</span>
+}
+
+// DeleteSharedLink removes a shared-link record from go-shares.
+func (s *SharesClient) DeleteSharedLink(ctx context.Context, id, ownerUserID string) error <span class="cov3" title="3">{
+        endpoint := fmt.Sprintf("%s/internal/shared-links/%s?ownerUserId=%s",
+                s.baseURL, url.PathEscape(id), url.QueryEscape(ownerUserID))
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="3">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="3">defer resp.Body.Close()
+
+        if resp.StatusCode == http.StatusNotFound </span><span class="cov1" title="1">{
+                return fmt.Errorf("shared link not found")
+        }</span>
+        <span class="cov2" title="2">if resp.StatusCode != http.StatusNoContent </span><span class="cov1" title="1">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+// DeleteSharedLinksByFileKey calls go-shares to remove all shared link records for a specific file.
+// Called when a file is deleted so stale records don't appear in the history dashboard.
+func (s *SharesClient) DeleteSharedLinksByFileKey(ctx context.Context, bucket, fileKey string) error <span class="cov2" title="2">{
+        endpoint := fmt.Sprintf("%s/internal/shared-links?bucket=%s&amp;fileKey=%s",
+                s.baseURL, url.QueryEscape(bucket), url.QueryEscape(fileKey))
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov2" title="2">req.Header.Set("X-Internal-Secret", s.secret)
+
+        resp, err := s.httpClient.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov2" title="2">defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK </span><span class="cov1" title="1">{
+                return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
 }
 
 // jsonReader returns a strings.Reader for an inline JSON string.
-func jsonReader(s string) *strings.Reader <span class="cov0" title="0">{ return strings.NewReader(s) }</span>
+func jsonReader(s string) *strings.Reader <span class="cov6" title="11">{ return strings.NewReader(s) }</span>
 </pre>
 		
-		<pre class="file" id="file10" style="display: none">package uploader
+		<pre class="file" id="file15" style="display: none">package uploader
 
 import (
         "fmt"
@@ -1786,8 +3390,8 @@ import (
 //   - Invalid / unsatisfiable range → 416 Range Not Satisfiable.
 //   - Content-Disposition is "inline" so the browser renders the player
 //     instead of triggering a file download.
-func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov7" title="10">{
-        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov1" title="1">{
+func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, key string) <span class="cov7" title="11">{
+        if claims, ok := ClaimsFromContext(r.Context()); ok </span><span class="cov3" title="2">{
                 if !a.canAccessBucket(r.Context(), claims, bucket) </span><span class="cov1" title="1">{
                         emitAudit(a, r, "file.access_denied", "/files/"+bucket+"/"+key+"/stream", http.StatusForbidden)
                         jsonError(w, "access denied to bucket "+bucket, http.StatusForbidden)
@@ -1796,16 +3400,16 @@ func (a *App) StreamFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
         }
 
         // Probe file metadata: total size + stored content-type.
-        <span class="cov7" title="9">head, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
+        <span class="cov7" title="10">head, err := a.S3Client.HeadObject(r.Context(), &amp;s3.HeadObjectInput{
                 Bucket: aws.String(bucket),
                 Key:    aws.String(key),
         })
-        if err != nil </span><span class="cov3" title="2">{
+        if err != nil </span><span class="cov4" title="3">{
                 if isObjectNotFound(err) </span><span class="cov1" title="1">{
                         jsonError(w, "file not found", http.StatusNotFound)
                         return
                 }</span>
-                <span class="cov1" title="1">jsonError(w, fmt.Sprintf("failed to stat file: %v", err), http.StatusInternalServerError)
+                <span class="cov3" title="2">jsonError(w, fmt.Sprintf("failed to stat file: %v", err), http.StatusInternalServerError)
                 return</span>
         }
 
@@ -1956,6 +3560,119 @@ func parseByteRange(header string, totalSize int64) (start, end int64, err error
                 end = totalSize - 1
         }</span>
         <span class="cov6" title="6">return start, end, nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file16" style="display: none">package uploader
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "net/http"
+)
+
+// VaultClient interacts with HashiCorp Vault's transit engine to provision and
+// delete per-user AES-256-GCM encryption keys for MinIO SSE-KMS.
+//
+// Key naming convention: "user-{keycloak_sub}" (flat, URL-safe).
+// Crypto-shredding: deleting the key makes all MinIO objects encrypted with it
+// permanently inaccessible, fulfilling GDPR Art. 17 right to erasure.
+type VaultClient struct {
+        addr  string
+        token string
+        http  *http.Client
+}
+
+// NewVaultClient creates a VaultClient. Returns nil if addr or token is empty
+// (SSE-KMS disabled — dev mode without Vault).
+func NewVaultClient(addr, token string) *VaultClient <span class="cov10" title="9">{
+        if addr == "" || token == "" </span><span class="cov3" title="2">{
+                return nil
+        }</span>
+        <span class="cov8" title="7">return &amp;VaultClient{addr: addr, token: token, http: &amp;http.Client{}}</span>
+}
+
+// userKeyName returns the Vault transit key name for a given Keycloak subject UUID.
+func userKeyName(sub string) string <span class="cov8" title="7">{
+        return "user-" + sub
+}</span>
+
+// ProvisionKey creates the transit key for a user if it does not already exist.
+// Idempotent: if the key already exists, the call succeeds silently.
+// Best-effort: callers should log but not block on errors.
+func (v *VaultClient) ProvisionKey(ctx context.Context, sub string) error <span class="cov5" title="3">{
+        name := userKeyName(sub)
+        url := fmt.Sprintf("%s/v1/transit/keys/%s", v.addr, name)
+
+        body, _ := json.Marshal(map[string]string{"type": "aes256-gcm96"})
+        req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov5" title="3">req.Header.Set("X-Vault-Token", v.token)
+        req.Header.Set("Content-Type", "application/json")
+
+        resp, err := v.http.Do(req)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov5" title="3">defer resp.Body.Close()
+
+        // 200/204 = created; 400 = key already exists — both are success.
+        if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent ||
+                resp.StatusCode == http.StatusBadRequest </span><span class="cov3" title="2">{
+                return nil
+        }</span>
+        <span class="cov1" title="1">return fmt.Errorf("vault: provision key %q: unexpected status %d", name, resp.StatusCode)</span>
+}
+
+// DeleteKey permanently deletes the user's encryption key from Vault.
+// This is crypto-shredding (GDPR Art. 17): any MinIO data encrypted with this
+// key becomes permanently inaccessible, even if the ciphertext remains on disk.
+//
+// Two-step process required by Vault: first enable deletion, then delete.
+// Best-effort: callers should log but not block on errors.
+func (v *VaultClient) DeleteKey(ctx context.Context, sub string) error <span class="cov5" title="3">{
+        name := userKeyName(sub)
+
+        // Step 1: allow deletion (Vault transit keys are deletion-protected by default).
+        configURL := fmt.Sprintf("%s/v1/transit/keys/%s/config", v.addr, name)
+        configBody, _ := json.Marshal(map[string]bool{"deletion_allowed": true})
+        configReq, err := http.NewRequestWithContext(ctx, http.MethodPost, configURL, bytes.NewReader(configBody))
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov5" title="3">configReq.Header.Set("X-Vault-Token", v.token)
+        configReq.Header.Set("Content-Type", "application/json")
+
+        configResp, err := v.http.Do(configReq)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov5" title="3">configResp.Body.Close()
+        if configResp.StatusCode != http.StatusNoContent &amp;&amp; configResp.StatusCode != http.StatusOK </span><span class="cov1" title="1">{
+                return fmt.Errorf("vault: enable deletion for key %q: status %d", name, configResp.StatusCode)
+        }</span>
+
+        // Step 2: delete the key.
+        <span class="cov3" title="2">deleteURL := fmt.Sprintf("%s/v1/transit/keys/%s", v.addr, name)
+        deleteReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="2">deleteReq.Header.Set("X-Vault-Token", v.token)
+
+        deleteResp, err := v.http.Do(deleteReq)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov3" title="2">deleteResp.Body.Close()
+        if deleteResp.StatusCode != http.StatusNoContent &amp;&amp; deleteResp.StatusCode != http.StatusOK </span><span class="cov1" title="1">{
+                return fmt.Errorf("vault: delete key %q: status %d", name, deleteResp.StatusCode)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
 }
 </pre>
 		

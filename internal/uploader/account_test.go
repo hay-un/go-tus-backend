@@ -432,6 +432,35 @@ func TestDeleteAccountHandler_ShouldFallBackToJWTBuckets_WhenListBucketsFails(t 
 	mockS3.AssertExpectations(t)
 }
 
+func TestDeleteAccountHandler_ShouldReturn204_WhenSharesDeleteFails(t *testing.T) {
+	// Arrange: shares server returns non-200 → DeleteUserShares logs error but continues
+	fakeShares := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError) // triggers deleteUserByIdentifier error
+	}))
+	defer fakeShares.Close()
+
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+	app.Shares = NewSharesClient(fakeShares.URL, "test-secret")
+
+	mockS3.On("ListBuckets", mock.Anything, &s3.ListBucketsInput{}, mock.Anything).
+		Return(&s3.ListBucketsOutput{}, nil)
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListObjectsV2Output{}, nil)
+	mockS3.On("DeleteBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.DeleteBucketOutput{}, nil)
+
+	req, _ := http.NewRequest(http.MethodDelete, "/users/me", nil)
+	req = withAccountDeleteClaims(req)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DeleteAccountHandler(rr, req)
+
+	// Assert: still returns 204 — delete user shares is best-effort
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+}
+
 // ── response helpers ──────────────────────────────────────────────────────────
 
 func parseJSONError(body string) string {

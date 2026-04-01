@@ -3,6 +3,7 @@ package uploader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -329,4 +330,47 @@ func TestProvisionUserHandler_ShouldSkipGranter_WhenEmailIsEmpty(t *testing.T) {
 	// Assert
 	assert.Equal(t, http.StatusOK, rr.Code)
 	mockGranter.AssertNotCalled(t, "GrantBucket")
+}
+
+func TestProvisionUserHandler_ShouldReturn500_WhenBucketExistsCheckFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("HeadBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("s3 internal error"))
+
+	body := `{"username":"bambang"}`
+	req, _ := http.NewRequest(http.MethodPost, "/internal/provision-user", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ProvisionUserHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestProvisionUserHandler_ShouldReturn500_WhenCreateBucketFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("HeadBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, &types.NoSuchBucket{})
+
+	mockS3.On("CreateBucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("create failed"))
+
+	body := `{"username":"bambang"}`
+	req, _ := http.NewRequest(http.MethodPost, "/internal/provision-user", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ProvisionUserHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
 }

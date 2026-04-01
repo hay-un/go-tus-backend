@@ -723,3 +723,192 @@ func TestIsHomeBucket_ShouldReturnFalse_WhenEmailIsEmpty(t *testing.T) {
 func TestIsHomeBucket_ShouldReturnFalse_WhenAtSignIsAtStart(t *testing.T) {
 	assert.False(t, isHomeBucket("@gmail.com", "files"))
 }
+
+func TestDeleteFileHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "default-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// HeadObject succeeds (file exists)
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadObjectOutput{}, nil)
+	// CopyObject fails
+	mockS3.On("CopyObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("copy failed"))
+
+	req := httptest.NewRequest(http.MethodDelete, "/files/my-bucket/photo.jpg", nil)
+	req = withAdminClaims(req)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DeleteFileHandler(rr, req, "my-bucket", "photo.jpg")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestDeleteFileHandler_ShouldReturn500_WhenHeadObjectFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "default-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// HeadObject returns generic error (not a not-found)
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("internal s3 error"))
+
+	req := httptest.NewRequest(http.MethodDelete, "/files/my-bucket/photo.jpg", nil)
+	req = withAdminClaims(req)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.DeleteFileHandler(rr, req, "my-bucket", "photo.jpg")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+// ── ListFileTrashHandler additional branches ──────────────────────────────────
+
+func TestListFileTrashHandler_ShouldReturn500_WhenListObjectsFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("s3 internal error"))
+
+	req := httptest.NewRequest(http.MethodGet, "/files/my-bucket/trash", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ListFileTrashHandler(rr, req, "my-bucket")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestListFileTrashHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, &types.NoSuchBucket{})
+
+	req := httptest.NewRequest(http.MethodGet, "/files/ghost-bucket/trash", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.ListFileTrashHandler(rr, req, "ghost-bucket")
+
+	// Assert
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+// ── RestoreFileHandler additional branches ────────────────────────────────────
+
+func TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForTrashFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// HeadObject for trash key returns generic error (not not-found)
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123"
+	}), mock.Anything).Return(nil, errors.New("s3 internal error"))
+
+	req := httptest.NewRequest(http.MethodPost, "/files/my-bucket/trash/abc123/restore", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileHandler(rr, req, "my-bucket", "abc123")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForOriginalFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// File exists in trash
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123"
+	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
+
+	// Original location check returns generic error (not not-found)
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "abc123"
+	}), mock.Anything).Return(nil, errors.New("s3 internal error"))
+
+	req := httptest.NewRequest(http.MethodPost, "/files/my-bucket/trash/abc123/restore", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileHandler(rr, req, "my-bucket", "abc123")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+func TestRestoreFileHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+
+	// File in trash
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "__trash__/abc123"
+	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
+
+	// Original location is free
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
+		return aws.ToString(input.Key) == "abc123"
+	}), mock.Anything).Return(nil, &types.NotFound{})
+
+	// CopyObject fails
+	mockS3.On("CopyObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("copy failed"))
+
+	req := httptest.NewRequest(http.MethodPost, "/files/my-bucket/trash/abc123/restore", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileHandler(rr, req, "my-bucket", "abc123")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockS3.AssertExpectations(t)
+}
+
+// ── realIP ────────────────────────────────────────────────────────────────────
+
+func TestRealIP_ShouldReturnXRealIP_WhenHeaderSet(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Real-IP", "1.2.3.4")
+	assert.Equal(t, "1.2.3.4", realIP(r))
+}
+
+func TestRealIP_ShouldReturnFirstEntry_WhenXForwardedForHasMultiple(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
+	assert.Equal(t, "10.0.0.1", realIP(r))
+}
+
+func TestRealIP_ShouldReturnXForwardedFor_WhenSingleIP(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-For", "10.0.0.5")
+	assert.Equal(t, "10.0.0.5", realIP(r))
+}
+
+func TestRealIP_ShouldReturnRawAddr_WhenSplitHostPortFails(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "not-valid-addr"
+	assert.Equal(t, "not-valid-addr", realIP(r))
+}

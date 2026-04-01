@@ -237,3 +237,71 @@ func TestDeleteSharedLinkHandler_ShouldReturn400_WhenIDEmpty(t *testing.T) {
 	// Assert
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestListSharedLinksHandler_ShouldReturn500_WhenListSharedLinksFails(t *testing.T) {
+	// Arrange — return non-JSON so the decoder fails (sharesclient doesn't check HTTP status)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not-json")) //nolint:errcheck
+	}))
+	defer sharesServer.Close()
+
+	app := &App{
+		Audit:  &NoopAuditProducer{},
+		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	r := httptest.NewRequest(http.MethodGet, "/files/shared-links", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"rosa-files"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ListSharedLinksHandler(w, r)
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestDeleteSharedLinkHandler_ShouldReturn500_WhenDeleteFails(t *testing.T) {
+	// Arrange — return non-JSON so the decoder fails with a non-"not found" error
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not-json")) //nolint:errcheck
+	}))
+	defer sharesServer.Close()
+
+	app := &App{
+		Audit:  &NoopAuditProducer{},
+		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	r := httptest.NewRequest(http.MethodDelete, "/files/shared-links/link-1", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"rosa-files"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.DeleteSharedLinkHandler(w, r, "link-1")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestListSharedLinksHandler_ShouldReturn500_WhenSharesReturnsNonOK(t *testing.T) {
+	// Arrange — shares server returns non-200 status; covers the status-check branch in ListSharedLinks
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer sharesServer.Close()
+
+	app := &App{
+		Audit:  &NoopAuditProducer{},
+		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	r := httptest.NewRequest(http.MethodGet, "/files/shared-links", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"rosa-files"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ListSharedLinksHandler(w, r)
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
