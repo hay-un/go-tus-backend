@@ -423,7 +423,7 @@ func TestSharesClientDeleteUserShares_ShouldCallBothEndpoints_WhenSuccessful(t *
 	assert.Equal(t, 2, callCount)
 }
 
-// ── CreateSharedLink ──────────────────────────────────────────────────────────
+// ── CreateSharedLinkRecord ────────────────────────────────────────────────────
 
 func TestSharesClientCreateSharedLink_ShouldSucceed_WhenCreated(t *testing.T) {
 	// Arrange
@@ -431,14 +431,16 @@ func TestSharesClientCreateSharedLink_ShouldSucceed_WhenCreated(t *testing.T) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Contains(t, r.URL.Path, "shared-links")
 		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"link-id","ownerUserId":"owner-uuid","bucket":"my-bucket","fileKey":"photo.jpg","expiresAt":"2099-01-01T00:00:00Z","createdAt":"2025-01-01T00:00:00Z"}`)) //nolint:errcheck
 	})
 	client := NewSharesClient(srv.URL, "test-secret")
 
 	// Act
-	err := client.CreateSharedLink(context.Background(), "owner-uuid", "my-bucket", "photo.jpg", time.Now().Add(24*time.Hour))
+	record, err := client.CreateSharedLinkRecord(context.Background(), "owner-uuid", "my-bucket", "photo.jpg", "", time.Now().Add(24*time.Hour))
 
 	// Assert
 	require.NoError(t, err)
+	assert.Equal(t, "link-id", record.ID)
 }
 
 func TestSharesClientCreateSharedLink_ShouldError_WhenServerFails(t *testing.T) {
@@ -449,10 +451,62 @@ func TestSharesClientCreateSharedLink_ShouldError_WhenServerFails(t *testing.T) 
 	client := NewSharesClient(srv.URL, "test-secret")
 
 	// Act
-	err := client.CreateSharedLink(context.Background(), "owner-uuid", "my-bucket", "photo.jpg", time.Now().Add(24*time.Hour))
+	record, err := client.CreateSharedLinkRecord(context.Background(), "owner-uuid", "my-bucket", "photo.jpg", "", time.Now().Add(24*time.Hour))
 
 	// Assert
 	require.Error(t, err)
+	assert.Nil(t, record)
+}
+
+// ── GetSharedLinkByID ─────────────────────────────────────────────────────────
+
+func TestSharesClientGetSharedLinkByID_ShouldReturnRecord_WhenFound(t *testing.T) {
+	// Arrange
+	srv := newMockSharesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Contains(t, r.URL.Path, "shared-links/test-id")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"test-id","ownerUserId":"owner","bucket":"b","fileKey":"k.mp4","expiresAt":"2099-01-01T00:00:00Z","createdAt":"2025-01-01T00:00:00Z"}`)) //nolint:errcheck
+	})
+	client := NewSharesClient(srv.URL, "test-secret")
+
+	// Act
+	record, err := client.GetSharedLinkByID(context.Background(), "test-id")
+
+	// Assert
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.Equal(t, "test-id", record.ID)
+}
+
+func TestSharesClientGetSharedLinkByID_ShouldReturnNil_WhenNotFound(t *testing.T) {
+	// Arrange
+	srv := newMockSharesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	client := NewSharesClient(srv.URL, "test-secret")
+
+	// Act
+	record, err := client.GetSharedLinkByID(context.Background(), "missing-id")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Nil(t, record)
+}
+
+func TestSharesClientGetSharedLinkByID_ShouldError_WhenServerFails(t *testing.T) {
+	// Arrange
+	srv := newMockSharesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	client := NewSharesClient(srv.URL, "test-secret")
+
+	// Act
+	record, err := client.GetSharedLinkByID(context.Background(), "test-id")
+
+	// Assert
+	require.Error(t, err)
+	assert.Nil(t, record)
 }
 
 // ── DeleteSharedLinksByFileKey ────────────────────────────────────────────────

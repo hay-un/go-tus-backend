@@ -6,9 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // ListSharedLinksHandler returns a paginated list of files the user has shared via link.
@@ -42,7 +39,8 @@ func (a *App) ListSharedLinksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enrich each record with a freshly generated presigned URL and an expired flag.
+	// Build response: URL is now the share page URL (frontend constructs from id).
+	// The "url" field is intentionally empty — clients should use id to build the URL.
 	type SharedLinkResponse struct {
 		ID        string    `json:"id"`
 		Bucket    string    `json:"bucket"`
@@ -60,24 +58,10 @@ func (a *App) ListSharedLinksHandler(w http.ResponseWriter, r *http.Request) {
 			ID:        rec.ID,
 			Bucket:    rec.Bucket,
 			FileKey:   rec.FileKey,
+			URL:       "", // clients construct share URL from id: /share/{id}
 			ExpiresAt: rec.ExpiresAt,
 			CreatedAt: rec.CreatedAt,
 			Expired:   now.After(rec.ExpiresAt),
-		}
-		// Only regenerate URL for non-expired links; presigning an already-expired link
-		// would produce a URL that fails immediately.
-		if !item.Expired && a.Presigner != nil {
-			remaining := rec.ExpiresAt.Sub(now)
-			if remaining > maxPresignExpiry {
-				remaining = maxPresignExpiry
-			}
-			presigned, presignErr := a.Presigner.PresignGetObject(r.Context(), &s3.GetObjectInput{
-				Bucket: aws.String(rec.Bucket),
-				Key:    aws.String(rec.FileKey),
-			}, s3.WithPresignExpires(remaining))
-			if presignErr == nil {
-				item.URL = presigned.URL
-			}
 		}
 		items = append(items, item)
 	}

@@ -1,20 +1,22 @@
 module music-streaming/backend
 
-go 1.24.0
+go 1.25.0
 
 require (
+	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/aws/aws-sdk-go-v2 v1.36.3
 	github.com/aws/aws-sdk-go-v2/config v1.29.12
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.65
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.79.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/stretchr/testify v1.10.0
 	github.com/tus/tusd/v2 v2.8.0
+	golang.org/x/crypto v0.50.0
 )
 
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
-	github.com/MicahParks/keyfunc/v3 v3.8.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.10 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.34 // indirect
@@ -32,7 +34,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -44,8 +45,8 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8 // indirect
-	golang.org/x/sync v0.12.0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

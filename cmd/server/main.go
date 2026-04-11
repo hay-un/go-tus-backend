@@ -122,7 +122,6 @@ func main() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK")) //nolint:errcheck
-		w.Write([]byte("OK")) //nolint:errcheck
 	})
 
 	// ── Routes ────────────────────────────────────────────────────────────────
@@ -136,6 +135,9 @@ func main() {
 	http.Handle("/buckets", wrap(http.HandlerFunc(app.BucketsHandler)))
 	http.Handle("/buckets/", wrap(http.HandlerFunc(app.BucketItemHandler)))
 	http.Handle("/users/me", wrap(http.HandlerFunc(app.DeleteAccountHandler)))
+
+	// ── Public share download routes (no auth — gated by per-link password) ──
+	http.Handle("/share/", uploader.CORS(http.HandlerFunc(app.ShareDownloadHandler)))
 
 	// ── Internal routes (server-to-server, shared secret auth) ───────────────
 	internalSecret := os.Getenv("INTERNAL_API_SECRET")

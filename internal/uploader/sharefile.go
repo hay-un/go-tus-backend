@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const maxPresignExpiry = 7 * 24 * time.Hour
@@ -19,13 +20,14 @@ type Presigner interface {
 	PresignGetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
 }
 
-// ShareFileHandler generates a temporary presigned download URL for a single file.
-// The URL is public — anyone with the link can download without logging in.
+// ShareFileHandler generates a share link for a single file.
+// The returned URL is a page URL (`/share/{id}`) that gates access via an optional password.
 //
-//	GET /files/share?bucket=x&file=y&expiry=24h
+//	GET /files/share?bucket=x&file=y&expiry=24h[&password=secret]
 //
-// expiry: Go duration string (e.g. "1h", "24h", "168h"). Default: 168h (7 days, MinIO max).
-// Returns: { "url": "<presigned-url>", "expiresAt": "<RFC3339>" }
+// expiry: Go duration string (e.g. "1h", "24h", "168h"). Default: 168h (7 days).
+// password: optional secret code; if provided it is bcrypt-hashed before storage.
+// Returns: { "shareId": "<uuid>", "expiresAt": "<RFC3339>" }
 func (a *App) ShareFileHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.URL.Query().Get("bucket")
 	file := r.URL.Query().Get("file")
@@ -55,7 +57,18 @@ func (a *App) ShareFileHandler(w http.ResponseWriter, r *http.Request) {
 		expiry = d
 	}
 
-	// Verify file exists before generating presigned URL.
+	// Hash the optional password before storage.
+	var passwordHash string
+	if pw := r.URL.Query().Get("password"); pw != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+		if err != nil {
+			jsonError(w, "failed to process password", http.StatusInternalServerError)
+			return
+		}
+		passwordHash = string(hash)
+	}
+
+	// Verify file exists before creating the share record.
 	_, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(file),
@@ -69,31 +82,33 @@ func (a *App) ShareFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := a.Presigner.PresignGetObject(r.Context(), &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(file),
-	}, s3.WithPresignExpires(expiry))
-	if err != nil {
-		jsonError(w, "failed to generate share link", http.StatusInternalServerError)
+	expiresAt := time.Now().UTC().Add(expiry)
+	emitAudit(a, r, "file.share", "/files/share?bucket="+bucket+"&file="+file, http.StatusOK)
+
+	if a.Shares == nil {
+		jsonError(w, "sharing feature is disabled", http.StatusServiceUnavailable)
 		return
 	}
 
-	expiresAt := time.Now().UTC().Add(expiry)
+	claims, hasClaims := ClaimsFromContext(r.Context())
+
+	// Persist the shared link record synchronously so we can return the shareId.
+	var ownerUserID string
+	if hasClaims {
+		ownerUserID = claims.Subject
+	}
+
+	link, err := a.Shares.CreateSharedLinkRecord(r.Context(), ownerUserID, bucket, file, passwordHash, expiresAt)
+	if err != nil {
+		log.Printf("shares: failed to persist shared link record: %v", err)
+		jsonError(w, "failed to create share link", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
-		"url":       req.URL,
+		"shareId":   link.ID,
 		"expiresAt": expiresAt.Format(time.RFC3339),
 	})
-	emitAudit(a, r, "file.share", "/files/share?bucket="+bucket+"&file="+file, http.StatusOK)
-
-	// Persist the shared link record for the history dashboard (fire-and-forget).
-	if a.Shares != nil {
-		if claims, ok := ClaimsFromContext(r.Context()); ok {
-			go func() {
-				if err := a.Shares.CreateSharedLink(context.Background(), claims.Subject, bucket, file, expiresAt); err != nil {
-					log.Printf("shares: failed to persist shared link record: %v", err)
-				}
-			}()
-		}
-	}
 }
+
