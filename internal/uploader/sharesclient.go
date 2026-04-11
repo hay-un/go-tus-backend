@@ -554,3 +554,166 @@ func (s *SharesClient) DeleteSharedLinksByFileKey(ctx context.Context, bucket, f
 
 // jsonReader returns a strings.Reader for an inline JSON string.
 func jsonReader(s string) *strings.Reader { return strings.NewReader(s) }
+
+// ── File Versions ─────────────────────────────────────────────────────────────
+
+// FileVersionRecord is a file version record returned by go-shares.
+type FileVersionRecord struct {
+	ID         string    `json:"id"`
+	Bucket     string    `json:"bucket"`
+	Filename   string    `json:"filename"`
+	S3Key      string    `json:"s3Key"`
+	VersionNum int       `json:"versionNum"`
+	Size       int64     `json:"size"`
+	ArchivedAt time.Time `json:"archivedAt"`
+}
+
+// CreateFileVersion persists a file version record in go-shares.
+func (s *SharesClient) CreateFileVersion(ctx context.Context, bucket, filename, s3Key string, size int64) (*FileVersionRecord, error) {
+	payload := fmt.Sprintf(
+		`{"bucket":%q,"filename":%q,"s3Key":%q,"size":%d}`,
+		bucket, filename, s3Key, size,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.baseURL+"/internal/file-versions",
+		jsonReader(payload),
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	var result FileVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListFileVersions returns all version records for a file in go-shares.
+func (s *SharesClient) ListFileVersions(ctx context.Context, bucket, filename string) ([]FileVersionRecord, error) {
+	endpoint := fmt.Sprintf("%s/internal/file-versions?bucket=%s&filename=%s",
+		s.baseURL, url.QueryEscape(bucket), url.QueryEscape(filename))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Data []FileVersionRecord `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if body.Data == nil {
+		body.Data = []FileVersionRecord{}
+	}
+	return body.Data, nil
+}
+
+// GetOldestFileVersion returns the oldest version record for a file, or nil if none exists.
+func (s *SharesClient) GetOldestFileVersion(ctx context.Context, bucket, filename string) (*FileVersionRecord, error) {
+	endpoint := fmt.Sprintf("%s/internal/file-versions/oldest?bucket=%s&filename=%s",
+		s.baseURL, url.QueryEscape(bucket), url.QueryEscape(filename))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	var result FileVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// CountFileVersions returns the number of version records for a file.
+func (s *SharesClient) CountFileVersions(ctx context.Context, bucket, filename string) (int, error) {
+	endpoint := fmt.Sprintf("%s/internal/file-versions/count?bucket=%s&filename=%s",
+		s.baseURL, url.QueryEscape(bucket), url.QueryEscape(filename))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Count int `json:"count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0, err
+	}
+	return body.Count, nil
+}
+
+// DeleteFileVersion removes a file version record from go-shares.
+func (s *SharesClient) DeleteFileVersion(ctx context.Context, id string) error {
+	endpoint := fmt.Sprintf("%s/internal/file-versions/%s", s.baseURL, url.PathEscape(id))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+	return nil
+}

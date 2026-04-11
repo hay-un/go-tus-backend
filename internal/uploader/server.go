@@ -51,6 +51,7 @@ type App struct {
 	KeycloakGranter    KeycloakGranter // nil when admin credentials not configured
 	VaultClient        *VaultClient    // nil when VAULT_ADDR not configured (SSE-KMS disabled)
 	TrashRetentionDays int             // 0 = no lifecycle rule set on bucket creation
+	MaxFileVersions    int             // 0 = unlimited; default 5
 	tusHandlers        sync.Map        // map[string]http.Handler — per-user-bucket TUS handlers
 }
 
@@ -140,6 +141,13 @@ func NewAppFromEnv() (*App, error) {
 		}
 	}
 
+	maxFileVersions := 5
+	if v := os.Getenv("MAX_FILE_VERSIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			maxFileVersions = n
+		}
+	}
+
 	// 3. Create Presigner — uses public URL if configured so share links are externally accessible.
 	// MINIO_PUBLIC_URL should be set to the URL reachable from outside Docker (e.g. Tailscale host).
 	// When empty, falls back to S3_ENDPOINT (internal only — links won't work outside Docker).
@@ -167,6 +175,7 @@ func NewAppFromEnv() (*App, error) {
 		S3Endpoint:         s3Endpoint,
 		Audit:              &NoopAuditProducer{},
 		TrashRetentionDays: trashRetentionDays,
+		MaxFileVersions:    maxFileVersions,
 	}, nil
 }
 
@@ -283,6 +292,43 @@ func (a *App) FilesHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(path, "/files/")
 	parts := strings.SplitN(rest, "/", 2)
 	hasTwoParts := len(parts) == 2 && parts[0] != "" && parts[1] != ""
+
+	// ── Non-TUS: GET /files/{bucket}/versions?filename=Y → list file versions ──
+	if r.Method == http.MethodGet && strings.HasSuffix(path, "/versions") && !isTUS {
+		bucket := strings.TrimPrefix(strings.TrimSuffix(path, "/versions"), "/files/")
+		a.ListFileVersionsHandler(w, r, bucket)
+		return
+	}
+
+	// ── Non-TUS: POST /files/{bucket}/{key}/version → archive version ──────────
+	if r.Method == http.MethodPost && strings.HasSuffix(path, "/version") && !isTUS {
+		rest2 := strings.TrimPrefix(strings.TrimSuffix(path, "/version"), "/files/")
+		parts2 := strings.SplitN(rest2, "/", 2)
+		if len(parts2) == 2 {
+			a.ArchiveFileVersionHandler(w, r, parts2[0], parts2[1])
+			return
+		}
+	}
+
+	// ── Non-TUS: POST /files/{bucket}/versions/{id}/restore ─────────────────────
+	if r.Method == http.MethodPost && strings.Contains(path, "/versions/") && strings.HasSuffix(path, "/restore") && !isTUS {
+		trimmed := strings.TrimPrefix(strings.TrimSuffix(path, "/restore"), "/files/")
+		parts2 := strings.SplitN(trimmed, "/versions/", 2)
+		if len(parts2) == 2 {
+			a.RestoreFileVersionHandler(w, r, parts2[0], parts2[1])
+			return
+		}
+	}
+
+	// ── Non-TUS: DELETE /files/{bucket}/versions/{id} ────────────────────────────
+	if r.Method == http.MethodDelete && strings.Contains(path, "/versions/") && !isTUS {
+		trimmed := strings.TrimPrefix(path, "/files/")
+		parts2 := strings.SplitN(trimmed, "/versions/", 2)
+		if len(parts2) == 2 && !strings.Contains(parts2[1], "/") {
+			a.DeleteFileVersionHandler(w, r, parts2[0], parts2[1])
+			return
+		}
+	}
 
 	// ── Non-TUS: /files/<bucket>/<key> or /files/<bucket>/<key>/stream ─────
 	if !isTUS && hasTwoParts {
