@@ -542,3 +542,35 @@ func TestSharesClientDeleteSharedLinksByFileKey_ShouldError_WhenServerFails(t *t
 	// Assert
 	require.Error(t, err)
 }
+
+// ── IncrementDownloadCount ────────────────────────────────────────────────────
+
+func TestSharesClientIncrementDownloadCount_ShouldSucceed_WhenOK(t *testing.T) {
+	// Arrange
+	srv := newMockSharesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Contains(t, r.URL.Path, "/downloaded")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	client := NewSharesClient(srv.URL, "test-secret")
+
+	// Act
+	err := client.IncrementDownloadCount(context.Background(), "link-123")
+
+	// Assert
+	require.NoError(t, err)
+}
+
+func TestSharesClientIncrementDownloadCount_ShouldError_WhenServerFails(t *testing.T) {
+	// Arrange
+	srv := newMockSharesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	client := NewSharesClient(srv.URL, "test-secret")
+
+	// Act
+	err := client.IncrementDownloadCount(context.Background(), "link-123")
+
+	// Assert
+	require.Error(t, err)
+}

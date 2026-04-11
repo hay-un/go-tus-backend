@@ -271,6 +271,10 @@ func TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenPasswordCorrect
 	// Arrange
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct"), bcrypt.MinCost)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/downloaded") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(linkJSON("pw-id", string(hash), "2099-01-01T00:00:00Z"))) //nolint:errcheck
 	}))
@@ -297,6 +301,10 @@ func TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenPasswordCorrect
 func TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenNoPasswordRequired(t *testing.T) {
 	// Arrange
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/downloaded") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(linkJSON("id", "", "2099-01-01T00:00:00Z"))) //nolint:errcheck
 	}))

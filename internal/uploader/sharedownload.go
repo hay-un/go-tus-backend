@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -122,6 +123,15 @@ func (a *App) handleShareDownload(w http.ResponseWriter, r *http.Request, id str
 		jsonError(w, "failed to generate download URL", http.StatusInternalServerError)
 		return
 	}
+
+	// Fire-and-forget: increment download count in go-shares.
+	go func() {
+		if err := a.Shares.IncrementDownloadCount(context.Background(), id); err != nil {
+			log.Printf("share download: failed to increment count for %s: %v", id, err)
+		}
+	}()
+
+	emitAudit(a, r, "file.share_download", "/share/"+id, http.StatusOK)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck

@@ -425,13 +425,14 @@ func (s *SharesClient) deleteUserByIdentifier(ctx context.Context, identifier st
 
 // SharedLinkRecord is a file-link record returned by go-shares.
 type SharedLinkRecord struct {
-	ID           string    `json:"id"`
-	OwnerUserID  string    `json:"ownerUserId"`
-	Bucket       string    `json:"bucket"`
-	FileKey      string    `json:"fileKey"`
-	PasswordHash string    `json:"passwordHash"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID            string    `json:"id"`
+	OwnerUserID   string    `json:"ownerUserId"`
+	Bucket        string    `json:"bucket"`
+	FileKey       string    `json:"fileKey"`
+	PasswordHash  string    `json:"passwordHash"`
+	DownloadCount int       `json:"downloadCount"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // SharedLinksPage is a paginated response from go-shares.
@@ -559,6 +560,28 @@ func (s *SharesClient) DeleteSharedLink(ctx context.Context, id, ownerUserID str
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("shared link not found")
 	}
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// IncrementDownloadCount notifies go-shares to atomically increment the download counter for a share link.
+// Called fire-and-forget after a successful download — errors are non-fatal.
+func (s *SharesClient) IncrementDownloadCount(ctx context.Context, id string) error {
+	endpoint := fmt.Sprintf("%s/internal/shared-links/%s/downloaded", s.baseURL, url.PathEscape(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("go-shares returned %d", resp.StatusCode)
 	}
