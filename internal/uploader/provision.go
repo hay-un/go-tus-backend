@@ -101,6 +101,11 @@ func (a *App) ProvisionUserHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Central Registry: track bucket ownership even if Keycloak grant fails.
+	if a.Shares != nil && body.Subject != "" {
+		_ = a.Shares.RegisterBucket(r.Context(), bucketName, body.Subject)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if status == "created" {
 		w.WriteHeader(http.StatusCreated)

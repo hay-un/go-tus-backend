@@ -1,0 +1,813 @@
+=== RUN   TestDeleteAccountHandler_ShouldReturn401_WhenNoClaims
+--- PASS: TestDeleteAccountHandler_ShouldReturn401_WhenNoClaims (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldReturn405_WhenMethodNotDelete
+--- PASS: TestDeleteAccountHandler_ShouldReturn405_WhenMethodNotDelete (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldHardDeleteAllOwnedBuckets_WhenCalled
+--- PASS: TestDeleteAccountHandler_ShouldHardDeleteAllOwnedBuckets_WhenCalled (0.01s)
+=== RUN   TestDeleteAccountHandler_ShouldSkipWildcardBucket_WhenAdminClaims
+--- PASS: TestDeleteAccountHandler_ShouldSkipWildcardBucket_WhenAdminClaims (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldSkipSharesStep_WhenSharesNil
+--- PASS: TestDeleteAccountHandler_ShouldSkipSharesStep_WhenSharesNil (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldCallDeleteUserSharesTwice_WhenSharesConfigured
+--- PASS: TestDeleteAccountHandler_ShouldCallDeleteUserSharesTwice_WhenSharesConfigured (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldDeleteKeycloakUser_WhenGranterConfigured
+--- PASS: TestDeleteAccountHandler_ShouldDeleteKeycloakUser_WhenGranterConfigured (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldReturn204EvenIfKeycloakFails_WhenDataDeleted
+2026/04/12 15:41:17 account delete: Keycloak user user-sub-uuid: keycloak unavailable
+--- PASS: TestDeleteAccountHandler_ShouldReturn204EvenIfKeycloakFails_WhenDataDeleted (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldContinueAfterBucketError_WhenOneMinIOCallFails
+2026/04/12 15:41:17 account delete: MinIO bucket "user-files": MinIO timeout
+--- PASS: TestDeleteAccountHandler_ShouldContinueAfterBucketError_WhenOneMinIOCallFails (0.00s)
+=== RUN   TestHardDeleteBucket_ShouldDeleteObjectsAndBucket_WhenObjectsExist
+--- PASS: TestHardDeleteBucket_ShouldDeleteObjectsAndBucket_WhenObjectsExist (0.00s)
+=== RUN   TestHardDeleteBucket_ShouldDeleteMultiplePages_WhenManyObjectsExist
+--- PASS: TestHardDeleteBucket_ShouldDeleteMultiplePages_WhenManyObjectsExist (0.00s)
+=== RUN   TestHardDeleteBucket_ShouldSkipDeleteObjects_WhenBucketEmpty
+--- PASS: TestHardDeleteBucket_ShouldSkipDeleteObjects_WhenBucketEmpty (0.00s)
+=== RUN   TestHardDeleteBucket_ShouldReturnNil_WhenBucketNotFound
+--- PASS: TestHardDeleteBucket_ShouldReturnNil_WhenBucketNotFound (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldDeleteSubBuckets_WhenJWTIsStale
+    account_test.go:462: FAIL:	ListObjectsV2(string,*s3.ListObjectsV2Input,string)
+        		at: [/Users/ridho/Documents/codirs-v2/go-tus-backend/internal/uploader/account_test.go:442]
+    account_test.go:462: FAIL:	DeleteBucket(string,*s3.DeleteBucketInput,string)
+        		at: [/Users/ridho/Documents/codirs-v2/go-tus-backend/internal/uploader/account_test.go:444]
+    account_test.go:462: FAIL: 2 out of 4 expectation(s) were met.
+        	The code you are testing needs to make 2 more call(s).
+        	at: [/Users/ridho/Documents/codirs-v2/go-tus-backend/internal/uploader/account_test.go:462]
+--- FAIL: TestDeleteAccountHandler_ShouldDeleteSubBuckets_WhenJWTIsStale (0.01s)
+=== RUN   TestDeleteAccountHandler_ShouldFallBackToJWTBuckets_WhenListBucketsFails
+2026/04/12 15:41:17 account delete: failed to fetch buckets from registry: go-shares registry returned 500 (falling back to JWT/scan)
+2026/04/12 15:41:17 shares: delete owner-side shares for user-sub-uuid: go-shares returned 500
+2026/04/12 15:41:17 shares: delete sharee-side shares for qwer@gmail.com: go-shares returned 500
+    account_test.go:499: FAIL:	ListBuckets(string,string,string)
+        		at: [/Users/ridho/Documents/codirs-v2/go-tus-backend/internal/uploader/account_test.go:477]
+    account_test.go:499: FAIL: 2 out of 3 expectation(s) were met.
+        	The code you are testing needs to make 1 more call(s).
+        	at: [/Users/ridho/Documents/codirs-v2/go-tus-backend/internal/uploader/account_test.go:499]
+--- FAIL: TestDeleteAccountHandler_ShouldFallBackToJWTBuckets_WhenListBucketsFails (0.00s)
+=== RUN   TestDeleteAccountHandler_ShouldReturn204_WhenSharesDeleteFails
+2026/04/12 15:41:17 account delete: failed to fetch buckets from registry: go-shares registry returned 500 (falling back to JWT/scan)
+2026/04/12 15:41:17 shares: delete owner-side shares for user-sub-uuid: go-shares returned 500
+2026/04/12 15:41:17 shares: delete sharee-side shares for user@example.com: go-shares returned 500
+--- PASS: TestDeleteAccountHandler_ShouldReturn204_WhenSharesDeleteFails (0.00s)
+=== RUN   TestListBucketsHandler_ShouldReturnAllBuckets_WhenBucketsExist
+--- PASS: TestListBucketsHandler_ShouldReturnAllBuckets_WhenBucketsExist (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn201WithCreatedAt_WhenNameIsAvailable
+--- PASS: TestCreateBucketHandler_ShouldReturn201WithCreatedAt_WhenNameIsAvailable (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn400_WhenNameIsEmpty
+--- PASS: TestCreateBucketHandler_ShouldReturn400_WhenNameIsEmpty (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn409_WhenBucketAlreadyExists
+--- PASS: TestCreateBucketHandler_ShouldReturn409_WhenBucketAlreadyExists (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn204AndPurgeObjects_WhenBucketExists
+--- PASS: TestDeleteBucketHandler_ShouldReturn204AndPurgeObjects_WhenBucketExists (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldSoftDelete_WhenSharesConfigured
+--- PASS: TestDeleteBucketHandler_ShouldSoftDelete_WhenSharesConfigured (0.01s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn401_WhenSharesConfiguredButNoAuth
+--- PASS: TestDeleteBucketHandler_ShouldReturn401_WhenSharesConfiguredButNoAuth (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn404_WhenBucketNotFound
+--- PASS: TestDeleteBucketHandler_ShouldReturn404_WhenBucketNotFound (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn500_WhenBucketExistsCheckFails
+--- PASS: TestDeleteBucketHandler_ShouldReturn500_WhenBucketExistsCheckFails (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn500_WhenListObjectsFails
+--- PASS: TestDeleteBucketHandler_ShouldReturn500_WhenListObjectsFails (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn500_WhenDeleteObjectsFails
+--- PASS: TestDeleteBucketHandler_ShouldReturn500_WhenDeleteObjectsFails (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn500_WhenDeleteBucketFails
+--- PASS: TestDeleteBucketHandler_ShouldReturn500_WhenDeleteBucketFails (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn500_WhenSoftDeleteBucketExistsCheckFails
+--- PASS: TestDeleteBucketHandler_ShouldReturn500_WhenSoftDeleteBucketExistsCheckFails (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn500_WhenCreateBucketFails
+--- PASS: TestCreateBucketHandler_ShouldReturn500_WhenCreateBucketFails (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldCopyObjectsAndDeleteOldBucket_WhenBothNamesAreValid
+--- PASS: TestRenameBucketHandler_ShouldCopyObjectsAndDeleteOldBucket_WhenBothNamesAreValid (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn409_WhenNewNameAlreadyExists
+--- PASS: TestRenameBucketHandler_ShouldReturn409_WhenNewNameAlreadyExists (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn400_WhenNewNameIsEmpty
+--- PASS: TestRenameBucketHandler_ShouldReturn400_WhenNewNameIsEmpty (0.00s)
+=== RUN   TestListBucketsHandler_ShouldFilterBuckets_WhenAllowedBucketsRestricted
+--- PASS: TestListBucketsHandler_ShouldFilterBuckets_WhenAllowedBucketsRestricted (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn403_WhenNonAdmin
+--- PASS: TestCreateBucketHandler_ShouldReturn403_WhenNonAdmin (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn403_WhenUserDoesNotOwnBucket
+--- PASS: TestDeleteBucketHandler_ShouldReturn403_WhenUserDoesNotOwnBucket (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn204_WhenUserOwnsBucket
+--- PASS: TestDeleteBucketHandler_ShouldReturn204_WhenUserOwnsBucket (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn403_WhenUserDoesNotOwnBucket
+--- PASS: TestRenameBucketHandler_ShouldReturn403_WhenUserDoesNotOwnBucket (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn404_WhenOldBucketNotFound
+--- PASS: TestRenameBucketHandler_ShouldReturn404_WhenOldBucketNotFound (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn400_WhenNewNameSameAsOld
+--- PASS: TestRenameBucketHandler_ShouldReturn400_WhenNewNameSameAsOld (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn500_WhenCreateBucketFails
+--- PASS: TestRenameBucketHandler_ShouldReturn500_WhenCreateBucketFails (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn500_WhenListObjectsFails
+--- PASS: TestRenameBucketHandler_ShouldReturn500_WhenListObjectsFails (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn500_WhenCopyObjectFails
+--- PASS: TestRenameBucketHandler_ShouldReturn500_WhenCopyObjectFails (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn500_WhenDeleteObjectsFails
+--- PASS: TestRenameBucketHandler_ShouldReturn500_WhenDeleteObjectsFails (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn500_WhenDeleteBucketFails
+--- PASS: TestRenameBucketHandler_ShouldReturn500_WhenDeleteBucketFails (0.00s)
+=== RUN   TestRenameBucketHandler_ShouldReturn200_WhenUserOwnsBucket
+--- PASS: TestRenameBucketHandler_ShouldReturn200_WhenUserOwnsBucket (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn201WithFullName_WhenUserOwnsParentBucket
+--- PASS: TestCreateBucketHandler_ShouldReturn201WithFullName_WhenUserOwnsParentBucket (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn403_WhenUserDoesNotOwnParentBucket
+--- PASS: TestCreateBucketHandler_ShouldReturn403_WhenUserDoesNotOwnParentBucket (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn401_WhenNoAuthAndParentProvided
+--- PASS: TestCreateBucketHandler_ShouldReturn401_WhenNoAuthAndParentProvided (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn409_WhenSubBucketAlreadyExists
+--- PASS: TestCreateBucketHandler_ShouldReturn409_WhenSubBucketAlreadyExists (0.00s)
+=== RUN   TestListBucketsHandler_ShouldIncludeSubBucket_WhenUserOwnsParentBucket
+--- PASS: TestListBucketsHandler_ShouldIncludeSubBucket_WhenUserOwnsParentBucket (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldCallGrantBucket_WhenCreatingSubBucket
+--- PASS: TestCreateBucketHandler_ShouldCallGrantBucket_WhenCreatingSubBucket (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldNotCallGrantBucket_WhenCreatingTopLevelBucket
+--- PASS: TestCreateBucketHandler_ShouldNotCallGrantBucket_WhenCreatingTopLevelBucket (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldAllowSubBucket_WhenJWTHasNoAllowedBucketsButParentIsUsersDefault
+--- PASS: TestCreateBucketHandler_ShouldAllowSubBucket_WhenJWTHasNoAllowedBucketsButParentIsUsersDefault (0.00s)
+=== RUN   TestCreateBucketHandler_ShouldReturn403_WhenJWTEmptyAndEmailDoesNotMatchParent
+--- PASS: TestCreateBucketHandler_ShouldReturn403_WhenJWTEmptyAndEmailDoesNotMatchParent (0.00s)
+=== RUN   TestBucketsHandler_ShouldReturn405_WhenMethodNotAllowed
+--- PASS: TestBucketsHandler_ShouldReturn405_WhenMethodNotAllowed (0.00s)
+=== RUN   TestListBucketsHandler_ShouldExcludeTrashedBuckets_WhenSharesConfigured
+--- PASS: TestListBucketsHandler_ShouldExcludeTrashedBuckets_WhenSharesConfigured (0.00s)
+=== RUN   TestListBucketsHandler_ShouldIncludeSharedBuckets_WhenSharesConfigured
+--- PASS: TestListBucketsHandler_ShouldIncludeSharedBuckets_WhenSharesConfigured (0.00s)
+=== RUN   TestListBucketsHandler_ShouldReturn200_WhenGetSharedBucketsReturnsNonJSON
+--- PASS: TestListBucketsHandler_ShouldReturn200_WhenGetSharedBucketsReturnsNonJSON (0.00s)
+=== RUN   TestListBucketsHandler_ShouldReturn200_WhenGetSharedBucketsReturnsNullData
+--- PASS: TestListBucketsHandler_ShouldReturn200_WhenGetSharedBucketsReturnsNullData (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn401_WhenSharesSetAndNoClaims
+--- PASS: TestDeleteBucketHandler_ShouldReturn401_WhenSharesSetAndNoClaims (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn404_WhenSharesSetAndBucketNotFound
+--- PASS: TestDeleteBucketHandler_ShouldReturn404_WhenSharesSetAndBucketNotFound (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn409_WhenBucketAlreadyInTrash
+--- PASS: TestDeleteBucketHandler_ShouldReturn409_WhenBucketAlreadyInTrash (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn204_WhenTrashSuccess
+--- PASS: TestDeleteBucketHandler_ShouldReturn204_WhenTrashSuccess (0.00s)
+=== RUN   TestDeleteBucketHandler_ShouldReturn500_WhenTrashFails
+--- PASS: TestDeleteBucketHandler_ShouldReturn500_WhenTrashFails (0.00s)
+=== RUN   TestListBucketTrashHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestListBucketTrashHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestListBucketTrashHandler_ShouldReturn401_WhenNoClaims
+--- PASS: TestListBucketTrashHandler_ShouldReturn401_WhenNoClaims (0.00s)
+=== RUN   TestListBucketTrashHandler_ShouldReturn200_WhenAuthorized
+--- PASS: TestListBucketTrashHandler_ShouldReturn200_WhenAuthorized (0.00s)
+=== RUN   TestListBucketTrashHandler_ShouldReturn500_WhenSharesFails
+--- PASS: TestListBucketTrashHandler_ShouldReturn500_WhenSharesFails (0.00s)
+=== RUN   TestRestoreBucketHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestRestoreBucketHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestRestoreBucketHandler_ShouldReturn403_WhenNotOwner
+--- PASS: TestRestoreBucketHandler_ShouldReturn403_WhenNotOwner (0.00s)
+=== RUN   TestRestoreBucketHandler_ShouldReturn204_WhenRestored
+--- PASS: TestRestoreBucketHandler_ShouldReturn204_WhenRestored (0.00s)
+=== RUN   TestRestoreBucketHandler_ShouldReturn404_WhenNotInTrash
+--- PASS: TestRestoreBucketHandler_ShouldReturn404_WhenNotInTrash (0.00s)
+=== RUN   TestRestoreBucketHandler_ShouldReturn500_WhenRestoreFails
+--- PASS: TestRestoreBucketHandler_ShouldReturn500_WhenRestoreFails (0.01s)
+=== RUN   TestCanAccessBucket_ShouldReturnFalse_WhenBucketIsInTrash
+--- PASS: TestCanAccessBucket_ShouldReturnFalse_WhenBucketIsInTrash (0.00s)
+=== RUN   TestCanAccessBucket_ShouldReturnTrue_WhenHomeBucket
+--- PASS: TestCanAccessBucket_ShouldReturnTrue_WhenHomeBucket (0.00s)
+=== RUN   TestCanAccessBucket_ShouldReturnFalse_WhenSharesNilAndNoMatch
+--- PASS: TestCanAccessBucket_ShouldReturnFalse_WhenSharesNilAndNoMatch (0.00s)
+=== RUN   TestCanAccessBucket_ShouldReturnTrue_WhenSharesGrantsAccess
+--- PASS: TestCanAccessBucket_ShouldReturnTrue_WhenSharesGrantsAccess (0.01s)
+=== RUN   TestCanAccessBucket_ShouldReturnFalse_WhenSharesCheckFails
+--- PASS: TestCanAccessBucket_ShouldReturnFalse_WhenSharesCheckFails (0.00s)
+=== RUN   TestCanAccessBucket_ShouldReturnFalse_WhenEmailEmpty
+--- PASS: TestCanAccessBucket_ShouldReturnFalse_WhenEmailEmpty (0.00s)
+=== RUN   TestCanAccessBucket_ShouldGrantAccess_WhenExactMatch
+--- PASS: TestCanAccessBucket_ShouldGrantAccess_WhenExactMatch (0.00s)
+=== RUN   TestCanAccessBucket_ShouldGrantAccess_WhenSubBucketOfAllowedParent
+--- PASS: TestCanAccessBucket_ShouldGrantAccess_WhenSubBucketOfAllowedParent (0.00s)
+=== RUN   TestCanAccessBucket_ShouldGrantAccess_WhenAdmin
+--- PASS: TestCanAccessBucket_ShouldGrantAccess_WhenAdmin (0.00s)
+=== RUN   TestCanAccessBucket_ShouldDenyAccess_WhenNeitherMatchNorSubBucket
+--- PASS: TestCanAccessBucket_ShouldDenyAccess_WhenNeitherMatchNorSubBucket (0.00s)
+=== RUN   TestCanAccessBucket_ShouldDenyAccess_WhenPartialPrefixNotSubBucket
+--- PASS: TestCanAccessBucket_ShouldDenyAccess_WhenPartialPrefixNotSubBucket (0.00s)
+=== RUN   TestOwnsBucket_ShouldReturnTrue_WhenExactMatch
+--- PASS: TestOwnsBucket_ShouldReturnTrue_WhenExactMatch (0.00s)
+=== RUN   TestOwnsBucket_ShouldReturnTrue_WhenSubBucketOfOwnedParent
+--- PASS: TestOwnsBucket_ShouldReturnTrue_WhenSubBucketOfOwnedParent (0.00s)
+=== RUN   TestOwnsBucket_ShouldReturnTrue_WhenAdmin
+--- PASS: TestOwnsBucket_ShouldReturnTrue_WhenAdmin (0.00s)
+=== RUN   TestOwnsBucket_ShouldReturnFalse_WhenWildcardOnly
+--- PASS: TestOwnsBucket_ShouldReturnFalse_WhenWildcardOnly (0.00s)
+=== RUN   TestCORS_ShouldUseAllowedOriginEnvVar_WhenSet
+--- PASS: TestCORS_ShouldUseAllowedOriginEnvVar_WhenSet (0.00s)
+=== RUN   TestCORS_ShouldSetCORSHeaders_WhenNormalRequestReceived
+--- PASS: TestCORS_ShouldSetCORSHeaders_WhenNormalRequestReceived (0.00s)
+=== RUN   TestCORS_ShouldReturn204WithoutCallingHandler_WhenOptionsPreflight
+--- PASS: TestCORS_ShouldReturn204WithoutCallingHandler_WhenOptionsPreflight (0.00s)
+=== RUN   TestCORS_ShouldReturn204_WhenOptionsPreflightOnFilesEndpoint
+--- PASS: TestCORS_ShouldReturn204_WhenOptionsPreflightOnFilesEndpoint (0.00s)
+=== RUN   TestCORS_ShouldExposeUploadHeaders_WhenResponseIsReturned
+--- PASS: TestCORS_ShouldExposeUploadHeaders_WhenResponseIsReturned (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn403_WhenAccessDenied
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn403_WhenAccessDenied (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn201_WhenSuccessful
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn201_WhenSuccessful (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldAutoDeleteOldest_WhenMaxVersionsExceeded
+--- PASS: TestArchiveFileVersionHandler_ShouldAutoDeleteOldest_WhenMaxVersionsExceeded (0.00s)
+=== RUN   TestListFileVersionsHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestListFileVersionsHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestListFileVersionsHandler_ShouldReturn400_WhenFilenameMissing
+--- PASS: TestListFileVersionsHandler_ShouldReturn400_WhenFilenameMissing (0.00s)
+=== RUN   TestListFileVersionsHandler_ShouldReturn200_WithVersionList
+--- PASS: TestListFileVersionsHandler_ShouldReturn200_WithVersionList (0.00s)
+=== RUN   TestRestoreFileVersionHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestRestoreFileVersionHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestRestoreFileVersionHandler_ShouldReturn404_WhenVersionNotFound
+--- PASS: TestRestoreFileVersionHandler_ShouldReturn404_WhenVersionNotFound (0.00s)
+=== RUN   TestRestoreFileVersionHandler_ShouldReturn200_WhenSuccessful
+--- PASS: TestRestoreFileVersionHandler_ShouldReturn200_WhenSuccessful (0.00s)
+=== RUN   TestDeleteFileVersionHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestDeleteFileVersionHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestDeleteFileVersionHandler_ShouldReturn404_WhenVersionNotFound
+--- PASS: TestDeleteFileVersionHandler_ShouldReturn404_WhenVersionNotFound (0.00s)
+=== RUN   TestDeleteFileVersionHandler_ShouldReturn204_WhenSuccessful
+--- PASS: TestDeleteFileVersionHandler_ShouldReturn204_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientCreateFileVersion_ShouldReturn201_WhenSuccessful
+--- PASS: TestSharesClientCreateFileVersion_ShouldReturn201_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientCreateFileVersion_ShouldError_WhenServerFails
+--- PASS: TestSharesClientCreateFileVersion_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientListFileVersions_ShouldReturnVersions_WhenSuccessful
+--- PASS: TestSharesClientListFileVersions_ShouldReturnVersions_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientListFileVersions_ShouldReturnEmpty_WhenDataNull
+--- PASS: TestSharesClientListFileVersions_ShouldReturnEmpty_WhenDataNull (0.00s)
+=== RUN   TestSharesClientGetOldestFileVersion_ShouldReturnRecord_WhenFound
+--- PASS: TestSharesClientGetOldestFileVersion_ShouldReturnRecord_WhenFound (0.00s)
+=== RUN   TestSharesClientGetOldestFileVersion_ShouldReturnNil_WhenNotFound
+--- PASS: TestSharesClientGetOldestFileVersion_ShouldReturnNil_WhenNotFound (0.00s)
+=== RUN   TestSharesClientCountFileVersions_ShouldReturnCount_WhenSuccessful
+--- PASS: TestSharesClientCountFileVersions_ShouldReturnCount_WhenSuccessful (0.01s)
+=== RUN   TestSharesClientCountFileVersions_ShouldError_WhenServerFails
+--- PASS: TestSharesClientCountFileVersions_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientDeleteFileVersion_ShouldSucceed_WhenRecordExists
+--- PASS: TestSharesClientDeleteFileVersion_ShouldSucceed_WhenRecordExists (0.00s)
+=== RUN   TestSharesClientDeleteFileVersion_ShouldError_WhenServerFails
+--- PASS: TestSharesClientDeleteFileVersion_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn404_WhenFileNotFound
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn404_WhenFileNotFound (0.01s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn500_WhenHeadObjectFails
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn500_WhenHeadObjectFails (0.01s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn500_WhenCopyObjectFails
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn500_WhenCopyObjectFails (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn500_WhenDeleteObjectsFails
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn500_WhenDeleteObjectsFails (0.00s)
+=== RUN   TestArchiveFileVersionHandler_ShouldReturn500_WhenCreateFileVersionFails
+--- PASS: TestArchiveFileVersionHandler_ShouldReturn500_WhenCreateFileVersionFails (0.00s)
+=== RUN   TestListFileVersionsHandler_ShouldReturn403_WhenAccessDenied
+--- PASS: TestListFileVersionsHandler_ShouldReturn403_WhenAccessDenied (0.01s)
+=== RUN   TestListFileVersionsHandler_ShouldReturn500_WhenSharesFails
+--- PASS: TestListFileVersionsHandler_ShouldReturn500_WhenSharesFails (0.00s)
+=== RUN   TestRestoreFileVersionHandler_ShouldReturn403_WhenAccessDenied
+--- PASS: TestRestoreFileVersionHandler_ShouldReturn403_WhenAccessDenied (0.00s)
+=== RUN   TestRestoreFileVersionHandler_ShouldReturn500_WhenListObjectsV2Fails
+--- PASS: TestRestoreFileVersionHandler_ShouldReturn500_WhenListObjectsV2Fails (0.00s)
+=== RUN   TestRestoreFileVersionHandler_ShouldReturn500_WhenCopyObjectFails
+--- PASS: TestRestoreFileVersionHandler_ShouldReturn500_WhenCopyObjectFails (0.00s)
+=== RUN   TestDeleteFileVersionHandler_ShouldReturn403_WhenAccessDenied
+--- PASS: TestDeleteFileVersionHandler_ShouldReturn403_WhenAccessDenied (0.00s)
+=== RUN   TestDeleteFileVersionHandler_ShouldReturn500_WhenListObjectsV2Fails
+--- PASS: TestDeleteFileVersionHandler_ShouldReturn500_WhenListObjectsV2Fails (0.01s)
+=== RUN   TestNewHTTPKeycloakGranter_ShouldReturnNil_WhenEmptyArgs
+--- PASS: TestNewHTTPKeycloakGranter_ShouldReturnNil_WhenEmptyArgs (0.00s)
+=== RUN   TestNewHTTPKeycloakGranter_ShouldReturnNil_WhenNoRealmSegment
+--- PASS: TestNewHTTPKeycloakGranter_ShouldReturnNil_WhenNoRealmSegment (0.00s)
+=== RUN   TestNewHTTPKeycloakGranter_ShouldReturnGranter_WhenValidArgs
+--- PASS: TestNewHTTPKeycloakGranter_ShouldReturnGranter_WhenValidArgs (0.00s)
+=== RUN   TestGrantBucket_ShouldAddBucket_WhenUserHasNoBuckets
+--- PASS: TestGrantBucket_ShouldAddBucket_WhenUserHasNoBuckets (0.01s)
+=== RUN   TestGrantBucket_ShouldBeIdempotent_WhenBucketAlreadyGranted
+--- PASS: TestGrantBucket_ShouldBeIdempotent_WhenBucketAlreadyGranted (0.00s)
+=== RUN   TestGrantBucket_ShouldReturnError_WhenTokenFetchFails
+--- PASS: TestGrantBucket_ShouldReturnError_WhenTokenFetchFails (0.00s)
+=== RUN   TestGrantBucket_ShouldReturnError_WhenUserNotFound
+--- PASS: TestGrantBucket_ShouldReturnError_WhenUserNotFound (0.00s)
+=== RUN   TestDeleteUser_ShouldSucceed_WhenTokenAndDeleteOK
+--- PASS: TestDeleteUser_ShouldSucceed_WhenTokenAndDeleteOK (0.00s)
+=== RUN   TestDeleteUser_ShouldReturnError_WhenTokenFetchFails
+--- PASS: TestDeleteUser_ShouldReturnError_WhenTokenFetchFails (0.00s)
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/bambang
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/Bambang_Pratama
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/rosa.maria@example.com
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/UPPERCASE
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/--leading-trailing--
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/multiple---hyphens
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/#00
+=== RUN   TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/123numbers456
+--- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/bambang (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/Bambang_Pratama (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/rosa.maria@example.com (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/UPPERCASE (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/--leading-trailing-- (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/multiple---hyphens (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/#00 (0.00s)
+    --- PASS: TestSanitizeUsername_ShouldNormalizeInput_WhenVariousFormatsProvided/123numbers456 (0.00s)
+=== RUN   TestInternalSecretMiddleware_ShouldAllowRequest_WhenSecretIsValid
+--- PASS: TestInternalSecretMiddleware_ShouldAllowRequest_WhenSecretIsValid (0.00s)
+=== RUN   TestInternalSecretMiddleware_ShouldReturn401_WhenSecretIsWrong
+--- PASS: TestInternalSecretMiddleware_ShouldReturn401_WhenSecretIsWrong (0.00s)
+=== RUN   TestInternalSecretMiddleware_ShouldReturn401_WhenSecretHeaderIsMissing
+--- PASS: TestInternalSecretMiddleware_ShouldReturn401_WhenSecretHeaderIsMissing (0.00s)
+=== RUN   TestInternalSecretMiddleware_ShouldAllowAllRequests_WhenSecretIsEmpty
+--- PASS: TestInternalSecretMiddleware_ShouldAllowAllRequests_WhenSecretIsEmpty (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn201WithCreatedStatus_WhenBucketDoesNotExist
+--- PASS: TestProvisionUserHandler_ShouldReturn201WithCreatedStatus_WhenBucketDoesNotExist (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn200WithExistsStatus_WhenBucketAlreadyExists
+--- PASS: TestProvisionUserHandler_ShouldReturn200WithExistsStatus_WhenBucketAlreadyExists (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn400_WhenUsernameIsEmpty
+--- PASS: TestProvisionUserHandler_ShouldReturn400_WhenUsernameIsEmpty (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldNormalizeUsernameAndReturn201_WhenInputHasUppercaseAndDots
+--- PASS: TestProvisionUserHandler_ShouldNormalizeUsernameAndReturn201_WhenInputHasUppercaseAndDots (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn405_WhenMethodIsNotPost
+--- PASS: TestProvisionUserHandler_ShouldReturn405_WhenMethodIsNotPost (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldCallGranter_WhenEmailProvided
+--- PASS: TestProvisionUserHandler_ShouldCallGranter_WhenEmailProvided (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn500_WhenGranterFails
+--- PASS: TestProvisionUserHandler_ShouldReturn500_WhenGranterFails (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldSkipGranter_WhenEmailIsEmpty
+--- PASS: TestProvisionUserHandler_ShouldSkipGranter_WhenEmailIsEmpty (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn500_WhenBucketExistsCheckFails
+--- PASS: TestProvisionUserHandler_ShouldReturn500_WhenBucketExistsCheckFails (0.00s)
+=== RUN   TestProvisionUserHandler_ShouldReturn500_WhenCreateBucketFails
+--- PASS: TestProvisionUserHandler_ShouldReturn500_WhenCreateBucketFails (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldPurgeBucket_WhenAllSucceeds
+2026/04/12 15:41:18 purge consumer: purging bucket "user-files" (owner: user-uuid)
+2026/04/12 15:41:18 purge consumer: failed to delete shares for "user-files": go-shares returned 204
+2026/04/12 15:41:18 purge consumer: bucket "user-files" purged successfully
+--- PASS: TestProcessPurgeEvent_ShouldPurgeBucket_WhenAllSucceeds (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldReturn_WhenInvalidJSON
+2026/04/12 15:41:18 purge consumer: failed to parse event: invalid character 'b' looking for beginning of object key string
+--- PASS: TestProcessPurgeEvent_ShouldReturn_WhenInvalidJSON (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldReturn_WhenBucketNameEmpty
+2026/04/12 15:41:18 purge consumer: missing bucketName in event
+--- PASS: TestProcessPurgeEvent_ShouldReturn_WhenBucketNameEmpty (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldReturn_WhenListObjectsFails
+2026/04/12 15:41:18 purge consumer: purging bucket "user-files" (owner: )
+2026/04/12 15:41:18 purge consumer: failed to list objects in "user-files": connection error
+--- PASS: TestProcessPurgeEvent_ShouldReturn_WhenListObjectsFails (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldReturn_WhenDeleteObjectsFails
+2026/04/12 15:41:18 purge consumer: purging bucket "user-files" (owner: )
+2026/04/12 15:41:18 purge consumer: failed to delete objects in "user-files": delete error
+--- PASS: TestProcessPurgeEvent_ShouldReturn_WhenDeleteObjectsFails (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldSkipObjectDelete_WhenBucketEmpty
+2026/04/12 15:41:18 purge consumer: purging bucket "empty-bucket" (owner: )
+2026/04/12 15:41:18 purge consumer: failed to delete shares for "empty-bucket": go-shares returned 204
+2026/04/12 15:41:18 purge consumer: bucket "empty-bucket" purged successfully
+--- PASS: TestProcessPurgeEvent_ShouldSkipObjectDelete_WhenBucketEmpty (0.00s)
+=== RUN   TestProcessPurgeEvent_ShouldContinue_WhenSharesNil
+2026/04/12 15:41:18 purge consumer: purging bucket "user-files" (owner: uuid)
+2026/04/12 15:41:18 purge consumer: bucket "user-files" purged successfully
+--- PASS: TestProcessPurgeEvent_ShouldContinue_WhenSharesNil (0.00s)
+=== RUN   TestTusHandler_ShouldReturnLocationHeader_WhenUploadCreated
+2026/04/12 15:41:18 WARN NetworkControlError method=POST path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 WARN NetworkControlError method=POST path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 INFO RequestIncoming method=POST path="" requestId=""
+2026/04/12 15:41:18 INFO UploadCreated method=POST path="" requestId="" id=8c907e68fd33d50a5fd9ab0b3d99bc47+123 size=100 url=http:///files/8c907e68fd33d50a5fd9ab0b3d99bc47+123
+2026/04/12 15:41:18 INFO ResponseOutgoing method=POST path="" requestId="" id=8c907e68fd33d50a5fd9ab0b3d99bc47+123 status=201 body=""
+--- PASS: TestTusHandler_ShouldReturnLocationHeader_WhenUploadCreated (0.00s)
+=== RUN   TestTusHandler_ShouldReturnTusHeaders_WhenOptionsRequested
+2026/04/12 15:41:18 WARN NetworkControlError method=OPTIONS path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 WARN NetworkControlError method=OPTIONS path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 INFO RequestIncoming method=OPTIONS path="" requestId=""
+2026/04/12 15:41:18 INFO ResponseOutgoing method=OPTIONS path="" requestId="" status=200 body=""
+--- PASS: TestTusHandler_ShouldReturnTusHeaders_WhenOptionsRequested (0.00s)
+=== RUN   TestParseRSAPublicKeyFromJWK_ShouldReturnKey_WhenValidInputs
+--- PASS: TestParseRSAPublicKeyFromJWK_ShouldReturnKey_WhenValidInputs (0.24s)
+=== RUN   TestParseRSAPublicKeyFromJWK_ShouldFail_WhenModulusInvalid
+--- PASS: TestParseRSAPublicKeyFromJWK_ShouldFail_WhenModulusInvalid (0.00s)
+=== RUN   TestParseRSAPublicKeyFromJWK_ShouldFail_WhenExponentInvalid
+--- PASS: TestParseRSAPublicKeyFromJWK_ShouldFail_WhenExponentInvalid (0.00s)
+=== RUN   TestParseRSAPublicKeyFromJWK_ShouldFail_WhenExponentIsZero
+--- PASS: TestParseRSAPublicKeyFromJWK_ShouldFail_WhenExponentIsZero (0.00s)
+=== RUN   TestBucketItemHandler_ShouldReturn503_WhenGetTrash
+--- PASS: TestBucketItemHandler_ShouldReturn503_WhenGetTrash (0.00s)
+=== RUN   TestBucketItemHandler_ShouldReturn405_WhenPostToTrash
+--- PASS: TestBucketItemHandler_ShouldReturn405_WhenPostToTrash (0.00s)
+=== RUN   TestBucketItemHandler_ShouldRoute_WhenRenamePath
+--- PASS: TestBucketItemHandler_ShouldRoute_WhenRenamePath (0.00s)
+=== RUN   TestBucketItemHandler_ShouldReturn405_WhenGetToRenamePath
+--- PASS: TestBucketItemHandler_ShouldReturn405_WhenGetToRenamePath (0.00s)
+=== RUN   TestBucketItemHandler_ShouldReturn503_WhenPostToRestorePath
+--- PASS: TestBucketItemHandler_ShouldReturn503_WhenPostToRestorePath (0.00s)
+=== RUN   TestBucketItemHandler_ShouldReturn405_WhenGetToRestorePath
+--- PASS: TestBucketItemHandler_ShouldReturn405_WhenGetToRestorePath (0.00s)
+=== RUN   TestBucketItemHandler_ShouldRouteToSharesHandler_WhenSharesPath
+--- PASS: TestBucketItemHandler_ShouldRouteToSharesHandler_WhenSharesPath (0.00s)
+=== RUN   TestBucketItemHandler_ShouldReturn405_WhenDefaultMethod
+--- PASS: TestBucketItemHandler_ShouldReturn405_WhenDefaultMethod (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToListFiles_WhenGetFilesRoot
+--- PASS: TestFilesHandler_ShouldRouteToListFiles_WhenGetFilesRoot (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToShareFile_WhenGetFilesShare
+--- PASS: TestFilesHandler_ShouldRouteToShareFile_WhenGetFilesShare (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToListSharedLinks_WhenGetSharedLinks
+--- PASS: TestFilesHandler_ShouldRouteToListSharedLinks_WhenGetSharedLinks (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToDeleteSharedLink_WhenDeleteSharedLinks
+--- PASS: TestFilesHandler_ShouldRouteToDeleteSharedLink_WhenDeleteSharedLinks (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToListFileTrash_WhenGetBucketTrash
+--- PASS: TestFilesHandler_ShouldRouteToListFileTrash_WhenGetBucketTrash (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToDownloadFile_WhenGetBucketKey
+--- PASS: TestFilesHandler_ShouldRouteToDownloadFile_WhenGetBucketKey (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToDeleteFile_WhenDeleteBucketKey
+--- PASS: TestFilesHandler_ShouldRouteToDeleteFile_WhenDeleteBucketKey (0.00s)
+=== RUN   TestFilesHandler_ShouldReturn405_WhenPostBucketKeyNotRestore
+--- PASS: TestFilesHandler_ShouldReturn405_WhenPostBucketKeyNotRestore (0.00s)
+=== RUN   TestFilesHandler_ShouldReturn405_WhenPutBucketKey
+--- PASS: TestFilesHandler_ShouldReturn405_WhenPutBucketKey (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToStreamFile_WhenGetBucketKeyStream
+--- PASS: TestFilesHandler_ShouldRouteToStreamFile_WhenGetBucketKeyStream (0.00s)
+=== RUN   TestFilesHandler_ShouldRouteToRestoreFile_WhenPostBucketTrashKeyRestore
+--- PASS: TestFilesHandler_ShouldRouteToRestoreFile_WhenPostBucketTrashKeyRestore (0.00s)
+=== RUN   TestFilesHandler_ShouldReturn400_WhenTUSPostWithMissingBucket
+--- PASS: TestFilesHandler_ShouldReturn400_WhenTUSPostWithMissingBucket (0.00s)
+=== RUN   TestFilesHandler_ShouldReturn403_WhenTUSPostAccessDenied
+--- PASS: TestFilesHandler_ShouldReturn403_WhenTUSPostAccessDenied (0.00s)
+=== RUN   TestNewTusHandler_ShouldCreateHandler_WhenValidBucketAndClientProvided
+--- PASS: TestNewTusHandler_ShouldCreateHandler_WhenValidBucketAndClientProvided (0.00s)
+=== RUN   TestTusHandler_ShouldReturn201WithLocation_WhenUploadIsInitiated
+2026/04/12 15:41:18 WARN NetworkControlError method=POST path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 WARN NetworkControlError method=POST path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 INFO RequestIncoming method=POST path="" requestId=""
+2026/04/12 15:41:18 INFO UploadCreated method=POST path="" requestId="" id=e5204b818de28bb535f9bb09d3e4b958+upload-id-123 size=100 url=http:///files/e5204b818de28bb535f9bb09d3e4b958+upload-id-123
+2026/04/12 15:41:18 INFO ResponseOutgoing method=POST path="" requestId="" id=e5204b818de28bb535f9bb09d3e4b958+upload-id-123 status=201 body=""
+--- PASS: TestTusHandler_ShouldReturn201WithLocation_WhenUploadIsInitiated (0.01s)
+=== RUN   TestTusHandler_ShouldReturn500_WhenS3IsUnavailable
+2026/04/12 15:41:18 WARN NetworkControlError method=POST path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 WARN NetworkControlError method=POST path="" requestId="" error="feature not supported"
+2026/04/12 15:41:18 INFO RequestIncoming method=POST path="" requestId=""
+2026/04/12 15:41:18 ERROR InternalServerError method=POST path="" requestId="" message="s3store: unable to create multipart upload:\ns3: ServiceUnavailable"
+2026/04/12 15:41:18 INFO ResponseOutgoing method=POST path="" requestId="" status=500 body="ERR_INTERNAL_SERVER_ERROR: s3store: unable to create multipart upload:\ns3: ServiceUnavailable\n"
+--- PASS: TestTusHandler_ShouldReturn500_WhenS3IsUnavailable (0.00s)
+=== RUN   TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing
+--- PASS: TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing (0.00s)
+=== RUN   TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists
+--- PASS: TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists (0.00s)
+=== RUN   TestListFilesHandler_ShouldReturn404_WhenBucketNotFound
+--- PASS: TestListFilesHandler_ShouldReturn404_WhenBucketNotFound (0.00s)
+=== RUN   TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists
+--- PASS: TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists (0.00s)
+=== RUN   TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound
+--- PASS: TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound (0.00s)
+=== RUN   TestDeleteFileHandler_ShouldMoveFileToTrash_WhenFileExists
+--- PASS: TestDeleteFileHandler_ShouldMoveFileToTrash_WhenFileExists (0.00s)
+=== RUN   TestDeleteFileHandler_ShouldReturn404WithoutDeletion_WhenFileNotFound
+--- PASS: TestDeleteFileHandler_ShouldReturn404WithoutDeletion_WhenFileNotFound (0.00s)
+=== RUN   TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid
+=== RUN   TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/bucket_present_alongside_filename
+=== RUN   TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/bucket_is_the_only_field
+=== RUN   TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/no_bucket_field_present
+=== RUN   TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/empty_header_string
+--- PASS: TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid (0.00s)
+    --- PASS: TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/bucket_present_alongside_filename (0.00s)
+    --- PASS: TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/bucket_is_the_only_field (0.00s)
+    --- PASS: TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/no_bucket_field_present (0.00s)
+    --- PASS: TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid/empty_header_string (0.00s)
+=== RUN   TestListFilesHandler_ShouldReturn403_WhenBucketNotAllowed
+--- PASS: TestListFilesHandler_ShouldReturn403_WhenBucketNotAllowed (0.00s)
+=== RUN   TestDownloadFileHandler_ShouldReturn403_WhenBucketNotAllowed
+--- PASS: TestDownloadFileHandler_ShouldReturn403_WhenBucketNotAllowed (0.00s)
+=== RUN   TestDeleteFileHandler_ShouldReturn403_WhenBucketNotAllowed
+--- PASS: TestDeleteFileHandler_ShouldReturn403_WhenBucketNotAllowed (0.00s)
+=== RUN   TestListFileTrashHandler_ShouldReturnTrashedFiles_WhenTrashHasFiles
+--- PASS: TestListFileTrashHandler_ShouldReturnTrashedFiles_WhenTrashHasFiles (0.00s)
+=== RUN   TestListFileTrashHandler_ShouldReturnEmptyData_WhenTrashIsEmpty
+--- PASS: TestListFileTrashHandler_ShouldReturnEmptyData_WhenTrashIsEmpty (0.00s)
+=== RUN   TestRestoreFileHandler_ShouldRestoreFile_WhenFileIsInTrash
+--- PASS: TestRestoreFileHandler_ShouldRestoreFile_WhenFileIsInTrash (0.00s)
+=== RUN   TestRestoreFileHandler_ShouldReturn404_WhenFileNotInTrash
+--- PASS: TestRestoreFileHandler_ShouldReturn404_WhenFileNotInTrash (0.00s)
+=== RUN   TestRestoreFileHandler_ShouldReturn409_WhenOriginalFileExists
+--- PASS: TestRestoreFileHandler_ShouldReturn409_WhenOriginalFileExists (0.00s)
+=== RUN   TestIsHomeBucket_ShouldReturnTrue_WhenBucketMatchesEmailLocalPart
+--- PASS: TestIsHomeBucket_ShouldReturnTrue_WhenBucketMatchesEmailLocalPart (0.00s)
+=== RUN   TestIsHomeBucket_ShouldReturnTrue_WhenEmailLocalPartHasSpecialChars
+--- PASS: TestIsHomeBucket_ShouldReturnTrue_WhenEmailLocalPartHasSpecialChars (0.00s)
+=== RUN   TestIsHomeBucket_ShouldReturnFalse_WhenBucketDoesNotMatch
+--- PASS: TestIsHomeBucket_ShouldReturnFalse_WhenBucketDoesNotMatch (0.00s)
+=== RUN   TestIsHomeBucket_ShouldReturnFalse_WhenEmailHasNoAtSign
+--- PASS: TestIsHomeBucket_ShouldReturnFalse_WhenEmailHasNoAtSign (0.00s)
+=== RUN   TestIsHomeBucket_ShouldReturnFalse_WhenEmailIsEmpty
+--- PASS: TestIsHomeBucket_ShouldReturnFalse_WhenEmailIsEmpty (0.00s)
+=== RUN   TestIsHomeBucket_ShouldReturnFalse_WhenAtSignIsAtStart
+--- PASS: TestIsHomeBucket_ShouldReturnFalse_WhenAtSignIsAtStart (0.00s)
+=== RUN   TestDeleteFileHandler_ShouldReturn500_WhenCopyObjectFails
+--- PASS: TestDeleteFileHandler_ShouldReturn500_WhenCopyObjectFails (0.00s)
+=== RUN   TestDeleteFileHandler_ShouldReturn500_WhenHeadObjectFails
+--- PASS: TestDeleteFileHandler_ShouldReturn500_WhenHeadObjectFails (0.00s)
+=== RUN   TestListFileTrashHandler_ShouldReturn500_WhenListObjectsFails
+--- PASS: TestListFileTrashHandler_ShouldReturn500_WhenListObjectsFails (0.00s)
+=== RUN   TestListFileTrashHandler_ShouldReturn404_WhenBucketNotFound
+--- PASS: TestListFileTrashHandler_ShouldReturn404_WhenBucketNotFound (0.00s)
+=== RUN   TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForTrashFails
+--- PASS: TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForTrashFails (0.00s)
+=== RUN   TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForOriginalFails
+--- PASS: TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForOriginalFails (0.00s)
+=== RUN   TestRestoreFileHandler_ShouldReturn500_WhenCopyObjectFails
+--- PASS: TestRestoreFileHandler_ShouldReturn500_WhenCopyObjectFails (0.00s)
+=== RUN   TestRealIP_ShouldReturnXRealIP_WhenHeaderSet
+--- PASS: TestRealIP_ShouldReturnXRealIP_WhenHeaderSet (0.00s)
+=== RUN   TestRealIP_ShouldReturnFirstEntry_WhenXForwardedForHasMultiple
+--- PASS: TestRealIP_ShouldReturnFirstEntry_WhenXForwardedForHasMultiple (0.00s)
+=== RUN   TestRealIP_ShouldReturnXForwardedFor_WhenSingleIP
+--- PASS: TestRealIP_ShouldReturnXForwardedFor_WhenSingleIP (0.00s)
+=== RUN   TestRealIP_ShouldReturnRawAddr_WhenSplitHostPortFails
+--- PASS: TestRealIP_ShouldReturnRawAddr_WhenSplitHostPortFails (0.00s)
+=== RUN   TestListSharedLinksHandler_ShouldReturn401_WhenNoClaims
+--- PASS: TestListSharedLinksHandler_ShouldReturn401_WhenNoClaims (0.00s)
+=== RUN   TestListSharedLinksHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestListSharedLinksHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestListSharedLinksHandler_ShouldReturnPaginatedLinks_WhenSuccessful
+--- PASS: TestListSharedLinksHandler_ShouldReturnPaginatedLinks_WhenSuccessful (0.00s)
+=== RUN   TestListSharedLinksHandler_ShouldMarkLinkAsExpired_WhenExpiresAtInPast
+--- PASS: TestListSharedLinksHandler_ShouldMarkLinkAsExpired_WhenExpiresAtInPast (0.00s)
+=== RUN   TestDeleteSharedLinkHandler_ShouldReturn401_WhenNoClaims
+--- PASS: TestDeleteSharedLinkHandler_ShouldReturn401_WhenNoClaims (0.00s)
+=== RUN   TestDeleteSharedLinkHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestDeleteSharedLinkHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestDeleteSharedLinkHandler_ShouldReturn204_WhenSuccessful
+--- PASS: TestDeleteSharedLinkHandler_ShouldReturn204_WhenSuccessful (0.00s)
+=== RUN   TestDeleteSharedLinkHandler_ShouldReturn404_WhenNotFound
+--- PASS: TestDeleteSharedLinkHandler_ShouldReturn404_WhenNotFound (0.00s)
+=== RUN   TestDeleteSharedLinkHandler_ShouldReturn400_WhenIDEmpty
+--- PASS: TestDeleteSharedLinkHandler_ShouldReturn400_WhenIDEmpty (0.00s)
+=== RUN   TestListSharedLinksHandler_ShouldReturn500_WhenListSharedLinksFails
+--- PASS: TestListSharedLinksHandler_ShouldReturn500_WhenListSharedLinksFails (0.00s)
+=== RUN   TestDeleteSharedLinkHandler_ShouldReturn500_WhenDeleteFails
+--- PASS: TestDeleteSharedLinkHandler_ShouldReturn500_WhenDeleteFails (0.00s)
+=== RUN   TestListSharedLinksHandler_ShouldReturn500_WhenSharesReturnsNonOK
+--- PASS: TestListSharedLinksHandler_ShouldReturn500_WhenSharesReturnsNonOK (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn400_WhenIDMissing
+--- PASS: TestShareDownloadHandler_ShouldReturn400_WhenIDMissing (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn503_WhenSharesNilOnGet
+--- PASS: TestShareDownloadHandler_ShouldReturn503_WhenSharesNilOnGet (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn404_WhenLinkNotFound
+--- PASS: TestShareDownloadHandler_ShouldReturn404_WhenLinkNotFound (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn410_WhenLinkExpiredOnGet
+--- PASS: TestShareDownloadHandler_ShouldReturn410_WhenLinkExpiredOnGet (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn200WithMeta_WhenLinkHasNoPassword
+--- PASS: TestShareDownloadHandler_ShouldReturn200WithMeta_WhenLinkHasNoPassword (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn200WithRequiresPassword_WhenLinkHasPassword
+--- PASS: TestShareDownloadHandler_ShouldReturn200WithRequiresPassword_WhenLinkHasPassword (0.02s)
+=== RUN   TestShareDownloadHandler_ShouldReturn405_WhenMethodNotAllowed
+--- PASS: TestShareDownloadHandler_ShouldReturn405_WhenMethodNotAllowed (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn503_WhenSharesNilOnPost
+--- PASS: TestShareDownloadHandler_ShouldReturn503_WhenSharesNilOnPost (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn410_WhenLinkExpiredOnPost
+--- PASS: TestShareDownloadHandler_ShouldReturn410_WhenLinkExpiredOnPost (0.01s)
+=== RUN   TestShareDownloadHandler_ShouldReturn401_WhenPasswordRequiredButMissing
+--- PASS: TestShareDownloadHandler_ShouldReturn401_WhenPasswordRequiredButMissing (0.01s)
+=== RUN   TestShareDownloadHandler_ShouldReturn401_WhenPasswordIncorrect
+--- PASS: TestShareDownloadHandler_ShouldReturn401_WhenPasswordIncorrect (0.01s)
+=== RUN   TestShareDownloadHandler_ShouldReturn500_WhenPresignerNil
+--- PASS: TestShareDownloadHandler_ShouldReturn500_WhenPresignerNil (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenPasswordCorrect
+--- PASS: TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenPasswordCorrect (0.03s)
+=== RUN   TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenNoPasswordRequired
+--- PASS: TestShareDownloadHandler_ShouldReturn200WithDownloadURL_WhenNoPasswordRequired (0.00s)
+=== RUN   TestShareDownloadHandler_ShouldReturn500_WhenPresignFails
+2026/04/12 15:41:18 share download: failed to increment count for id: Post "http://127.0.0.1:54003/internal/shared-links/id/downloaded": dial tcp 127.0.0.1:54003: connect: connection refused
+--- PASS: TestShareDownloadHandler_ShouldReturn500_WhenPresignFails (0.00s)
+=== RUN   TestResolveFileName_ShouldReturnFilename_WhenInfoSidecarExists
+--- PASS: TestResolveFileName_ShouldReturnFilename_WhenInfoSidecarExists (0.00s)
+=== RUN   TestResolveFileName_ShouldFallbackToFileKey_WhenInfoSidecarMissing
+--- PASS: TestResolveFileName_ShouldFallbackToFileKey_WhenInfoSidecarMissing (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn400_WhenBucketMissing
+--- PASS: TestShareFileHandler_ShouldReturn400_WhenBucketMissing (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn400_WhenFileMissing
+--- PASS: TestShareFileHandler_ShouldReturn400_WhenFileMissing (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn403_WhenAccessDenied
+--- PASS: TestShareFileHandler_ShouldReturn403_WhenAccessDenied (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn400_WhenExpiryInvalid
+--- PASS: TestShareFileHandler_ShouldReturn400_WhenExpiryInvalid (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn400_WhenExpiryIsNegative
+--- PASS: TestShareFileHandler_ShouldReturn400_WhenExpiryIsNegative (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn404_WhenFileNotFound
+--- PASS: TestShareFileHandler_ShouldReturn404_WhenFileNotFound (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestShareFileHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestShareFileHandler_ShouldReturn500_WhenSharesClientFails
+2026/04/12 15:41:18 shares: failed to persist shared link record: go-shares returned 500
+--- PASS: TestShareFileHandler_ShouldReturn500_WhenSharesClientFails (0.01s)
+=== RUN   TestShareFileHandler_ShouldReturn200WithShareId_WhenSuccessful
+--- PASS: TestShareFileHandler_ShouldReturn200WithShareId_WhenSuccessful (0.01s)
+=== RUN   TestShareFileHandler_ShouldHashPassword_WhenPasswordProvided
+--- PASS: TestShareFileHandler_ShouldHashPassword_WhenPasswordProvided (0.19s)
+=== RUN   TestShareFileHandler_ShouldUseDefaultExpiry_WhenExpiryParamAbsent
+--- PASS: TestShareFileHandler_ShouldUseDefaultExpiry_WhenExpiryParamAbsent (0.00s)
+=== RUN   TestShareFileHandler_ShouldAllowAccess_WhenAdminClaims
+--- PASS: TestShareFileHandler_ShouldAllowAccess_WhenAdminClaims (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn503_WhenSharesNil
+--- PASS: TestSharesItemHandler_ShouldReturn503_WhenSharesNil (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn400_WhenBucketEmpty
+--- PASS: TestSharesItemHandler_ShouldReturn400_WhenBucketEmpty (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn403_WhenNotOwner
+--- PASS: TestSharesItemHandler_ShouldReturn403_WhenNotOwner (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn405_WhenInvalidMethod
+--- PASS: TestSharesItemHandler_ShouldReturn405_WhenInvalidMethod (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturnShares_WhenListSucceeds
+--- PASS: TestSharesItemHandler_ShouldReturnShares_WhenListSucceeds (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn201_WhenCreateShareSucceeds
+--- PASS: TestSharesItemHandler_ShouldReturn201_WhenCreateShareSucceeds (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn400_WhenShareeEmailMissing
+--- PASS: TestSharesItemHandler_ShouldReturn400_WhenShareeEmailMissing (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn400_WhenPermissionInvalid
+--- PASS: TestSharesItemHandler_ShouldReturn400_WhenPermissionInvalid (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn409_WhenShareAlreadyExists
+--- PASS: TestSharesItemHandler_ShouldReturn409_WhenShareAlreadyExists (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn400_WhenInvalidJSON
+--- PASS: TestSharesItemHandler_ShouldReturn400_WhenInvalidJSON (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn204_WhenDeleteShare
+--- PASS: TestSharesItemHandler_ShouldReturn204_WhenDeleteShare (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn404_WhenDeleteShareNotFound
+--- PASS: TestSharesItemHandler_ShouldReturn404_WhenDeleteShareNotFound (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn500_WhenListSharesFails
+--- PASS: TestSharesItemHandler_ShouldReturn500_WhenListSharesFails (0.00s)
+=== RUN   TestSharesItemHandler_ShouldReturn500_WhenDeleteShareFails
+--- PASS: TestSharesItemHandler_ShouldReturn500_WhenDeleteShareFails (0.00s)
+=== RUN   TestSharesClientCanAccess_ShouldReturnTrue_WhenServerReturns200
+--- PASS: TestSharesClientCanAccess_ShouldReturnTrue_WhenServerReturns200 (0.00s)
+=== RUN   TestSharesClientCanAccess_ShouldReturnFalse_WhenServerReturns403
+--- PASS: TestSharesClientCanAccess_ShouldReturnFalse_WhenServerReturns403 (0.00s)
+=== RUN   TestSharesClientCanAccess_ShouldReturnCached_WhenCalledTwice
+--- PASS: TestSharesClientCanAccess_ShouldReturnCached_WhenCalledTwice (0.00s)
+=== RUN   TestSharesClientInvalidateCache_ShouldRemoveMatchingEntries
+--- PASS: TestSharesClientInvalidateCache_ShouldRemoveMatchingEntries (0.00s)
+=== RUN   TestSharesClientGetSharesForBucket_ShouldReturnShares_WhenSuccessful
+--- PASS: TestSharesClientGetSharesForBucket_ShouldReturnShares_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientGetSharesForBucket_ShouldReturnEmpty_WhenDataNull
+--- PASS: TestSharesClientGetSharesForBucket_ShouldReturnEmpty_WhenDataNull (0.00s)
+=== RUN   TestSharesClientCreateShare_ShouldReturnResult_WhenSuccessful
+--- PASS: TestSharesClientCreateShare_ShouldReturnResult_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientCreateShare_ShouldReturnConflictError_WhenAlreadyExists
+--- PASS: TestSharesClientCreateShare_ShouldReturnConflictError_WhenAlreadyExists (0.00s)
+=== RUN   TestSharesClientCreateShare_ShouldReturnError_WhenServerFails
+--- PASS: TestSharesClientCreateShare_ShouldReturnError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientDeleteShare_ShouldSucceed_WhenShareExists
+--- PASS: TestSharesClientDeleteShare_ShouldSucceed_WhenShareExists (0.00s)
+=== RUN   TestSharesClientDeleteShare_ShouldReturnNotFoundError_WhenShareMissing
+--- PASS: TestSharesClientDeleteShare_ShouldReturnNotFoundError_WhenShareMissing (0.00s)
+=== RUN   TestSharesClientGetSharedBuckets_ShouldReturnBuckets_WhenSuccessful
+--- PASS: TestSharesClientGetSharedBuckets_ShouldReturnBuckets_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientDeleteSharesForBucket_ShouldSucceed_WhenOK
+--- PASS: TestSharesClientDeleteSharesForBucket_ShouldSucceed_WhenOK (0.00s)
+=== RUN   TestSharesClientDeleteSharesForBucket_ShouldError_WhenServerFails
+--- PASS: TestSharesClientDeleteSharesForBucket_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientIsBucketDeleted_ShouldReturnTrue_WhenDeleted
+--- PASS: TestSharesClientIsBucketDeleted_ShouldReturnTrue_WhenDeleted (0.00s)
+=== RUN   TestSharesClientIsBucketDeleted_ShouldReturnCached_WhenCalledTwice
+--- PASS: TestSharesClientIsBucketDeleted_ShouldReturnCached_WhenCalledTwice (0.00s)
+=== RUN   TestSharesClientRestoreBucket_ShouldSucceed_WhenBucketInTrash
+--- PASS: TestSharesClientRestoreBucket_ShouldSucceed_WhenBucketInTrash (0.00s)
+=== RUN   TestSharesClientRestoreBucket_ShouldReturnNotFoundError_WhenNotInTrash
+--- PASS: TestSharesClientRestoreBucket_ShouldReturnNotFoundError_WhenNotInTrash (0.00s)
+=== RUN   TestSharesClientGetTrashedBuckets_ShouldReturnList_WhenSuccessful
+--- PASS: TestSharesClientGetTrashedBuckets_ShouldReturnList_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientPurgeBucketRecord_ShouldSucceed_WhenRecordExists
+--- PASS: TestSharesClientPurgeBucketRecord_ShouldSucceed_WhenRecordExists (0.00s)
+=== RUN   TestSharesClientPurgeBucketRecord_ShouldError_WhenNotFound
+--- PASS: TestSharesClientPurgeBucketRecord_ShouldError_WhenNotFound (0.00s)
+=== RUN   TestSharesClientDeleteUserShares_ShouldCallBothEndpoints_WhenSuccessful
+--- PASS: TestSharesClientDeleteUserShares_ShouldCallBothEndpoints_WhenSuccessful (0.00s)
+=== RUN   TestSharesClientCreateSharedLink_ShouldSucceed_WhenCreated
+--- PASS: TestSharesClientCreateSharedLink_ShouldSucceed_WhenCreated (0.00s)
+=== RUN   TestSharesClientCreateSharedLink_ShouldError_WhenServerFails
+--- PASS: TestSharesClientCreateSharedLink_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientGetSharedLinkByID_ShouldReturnRecord_WhenFound
+--- PASS: TestSharesClientGetSharedLinkByID_ShouldReturnRecord_WhenFound (0.00s)
+=== RUN   TestSharesClientGetSharedLinkByID_ShouldReturnNil_WhenNotFound
+--- PASS: TestSharesClientGetSharedLinkByID_ShouldReturnNil_WhenNotFound (0.00s)
+=== RUN   TestSharesClientGetSharedLinkByID_ShouldError_WhenServerFails
+--- PASS: TestSharesClientGetSharedLinkByID_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientDeleteSharedLinksByFileKey_ShouldSucceed_WhenOK
+--- PASS: TestSharesClientDeleteSharedLinksByFileKey_ShouldSucceed_WhenOK (0.00s)
+=== RUN   TestSharesClientDeleteSharedLinksByFileKey_ShouldError_WhenServerFails
+--- PASS: TestSharesClientDeleteSharedLinksByFileKey_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestSharesClientIncrementDownloadCount_ShouldSucceed_WhenOK
+--- PASS: TestSharesClientIncrementDownloadCount_ShouldSucceed_WhenOK (0.00s)
+=== RUN   TestSharesClientIncrementDownloadCount_ShouldError_WhenServerFails
+--- PASS: TestSharesClientIncrementDownloadCount_ShouldError_WhenServerFails (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn200WithFullBody_WhenNoRangeHeader
+--- PASS: TestStreamFileHandler_ShouldReturn200WithFullBody_WhenNoRangeHeader (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn206WithPartialBody_WhenRangeHeaderPresent
+--- PASS: TestStreamFileHandler_ShouldReturn206WithPartialBody_WhenRangeHeaderPresent (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn206WithSuffixRange_WhenRangeIsNegative
+--- PASS: TestStreamFileHandler_ShouldReturn206WithSuffixRange_WhenRangeIsNegative (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn416_WhenRangeExceedsFileSize
+--- PASS: TestStreamFileHandler_ShouldReturn416_WhenRangeExceedsFileSize (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn404_WhenFileNotFound
+--- PASS: TestStreamFileHandler_ShouldReturn404_WhenFileNotFound (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn500_WhenHeadObjectFails
+--- PASS: TestStreamFileHandler_ShouldReturn500_WhenHeadObjectFails (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn500_WhenGetObjectFails
+--- PASS: TestStreamFileHandler_ShouldReturn500_WhenGetObjectFails (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn404_WhenGetObjectNotFound
+--- PASS: TestStreamFileHandler_ShouldReturn404_WhenGetObjectNotFound (0.00s)
+=== RUN   TestStreamFileHandler_ShouldUseOctetStream_WhenContentTypeNotSetInS3
+--- PASS: TestStreamFileHandler_ShouldUseOctetStream_WhenContentTypeNotSetInS3 (0.00s)
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/specific_range_within_bounds
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/mid-file_range
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/open-ended_range_from_start
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/open-ended_range_from_mid-file
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/suffix_range_last_100_bytes
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/suffix_range_larger_than_file_clamps_to_zero
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/range_end_exceeds_size_is_clamped_to_last_byte
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/single_byte_at_start
+=== RUN   TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/single_byte_at_end
+--- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/specific_range_within_bounds (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/mid-file_range (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/open-ended_range_from_start (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/open-ended_range_from_mid-file (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/suffix_range_last_100_bytes (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/suffix_range_larger_than_file_clamps_to_zero (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/range_end_exceeds_size_is_clamped_to_last_byte (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/single_byte_at_start (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnCorrectRange_WhenRangeIsValid/single_byte_at_end (0.00s)
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/unsupported_range_unit
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/start_byte_equals_total_size
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/start_byte_exceeds_total_size
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/end_is_less_than_start
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/non-numeric_start
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/non-numeric_end
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/multi-range_not_supported
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/both_start_and_end_empty
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/suffix_range_of_zero_bytes
+=== RUN   TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/negative_start
+--- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/unsupported_range_unit (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/start_byte_equals_total_size (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/start_byte_exceeds_total_size (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/end_is_less_than_start (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/non-numeric_start (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/non-numeric_end (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/multi-range_not_supported (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/both_start_and_end_empty (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/suffix_range_of_zero_bytes (0.00s)
+    --- PASS: TestParseByteRange_ShouldReturnError_WhenRangeIsInvalid/negative_start (0.00s)
+=== RUN   TestStreamFileHandler_ShouldReturn403_WhenBucketNotAllowed
+--- PASS: TestStreamFileHandler_ShouldReturn403_WhenBucketNotAllowed (0.00s)
+=== RUN   TestNewVaultClient_ShouldReturnNil_WhenAddrEmpty
+--- PASS: TestNewVaultClient_ShouldReturnNil_WhenAddrEmpty (0.00s)
+=== RUN   TestNewVaultClient_ShouldReturnNil_WhenTokenEmpty
+--- PASS: TestNewVaultClient_ShouldReturnNil_WhenTokenEmpty (0.00s)
+=== RUN   TestNewVaultClient_ShouldReturnClient_WhenBothSet
+--- PASS: TestNewVaultClient_ShouldReturnClient_WhenBothSet (0.00s)
+=== RUN   TestVaultClient_ProvisionKey_ShouldSucceed_WhenVaultReturns200
+--- PASS: TestVaultClient_ProvisionKey_ShouldSucceed_WhenVaultReturns200 (0.01s)
+=== RUN   TestVaultClient_ProvisionKey_ShouldSucceed_WhenKeyAlreadyExists
+--- PASS: TestVaultClient_ProvisionKey_ShouldSucceed_WhenKeyAlreadyExists (0.00s)
+=== RUN   TestVaultClient_ProvisionKey_ShouldReturnError_WhenVaultReturns500
+--- PASS: TestVaultClient_ProvisionKey_ShouldReturnError_WhenVaultReturns500 (0.00s)
+=== RUN   TestVaultClient_DeleteKey_ShouldSucceed_WhenBothStepsSucceed
+--- PASS: TestVaultClient_DeleteKey_ShouldSucceed_WhenBothStepsSucceed (0.00s)
+=== RUN   TestVaultClient_DeleteKey_ShouldReturnError_WhenConfigStepFails
+--- PASS: TestVaultClient_DeleteKey_ShouldReturnError_WhenConfigStepFails (0.00s)
+=== RUN   TestVaultClient_DeleteKey_ShouldReturnError_WhenDeleteStepFails
+--- PASS: TestVaultClient_DeleteKey_ShouldReturnError_WhenDeleteStepFails (0.00s)
+=== RUN   TestUserKeyName_ShouldReturnUserPrefixedName
+--- PASS: TestUserKeyName_ShouldReturnUserPrefixedName (0.00s)
+=== RUN   TestNoopAuditProducer_ShouldReturnNil_WhenEmitCalled
+--- PASS: TestNoopAuditProducer_ShouldReturnNil_WhenEmitCalled (0.00s)
+=== RUN   TestNoopAuditProducer_ShouldReturnNil_WhenCloseCalled
+--- PASS: TestNoopAuditProducer_ShouldReturnNil_WhenCloseCalled (0.00s)
+=== RUN   TestKafkaAuditProducer_ShouldMarshalEvent_WhenEmitCalled
+--- PASS: TestKafkaAuditProducer_ShouldMarshalEvent_WhenEmitCalled (0.00s)
+=== RUN   TestKafkaAuditProducer_ShouldReturnError_WhenWriteFails
+--- PASS: TestKafkaAuditProducer_ShouldReturnError_WhenWriteFails (0.00s)
+=== RUN   TestEmitAudit_ShouldNotBlock_WhenKafkaDown
+--- PASS: TestEmitAudit_ShouldNotBlock_WhenKafkaDown (0.00s)
+=== RUN   TestJWTMiddleware_ShouldBypass_WhenIssuerEmpty
+--- PASS: TestJWTMiddleware_ShouldBypass_WhenIssuerEmpty (0.00s)
+=== RUN   TestJWTMiddleware_ShouldReturn401_WhenNoToken
+--- PASS: TestJWTMiddleware_ShouldReturn401_WhenNoToken (0.14s)
+=== RUN   TestJWTMiddleware_ShouldReturn401_WhenTokenExpired
+--- PASS: TestJWTMiddleware_ShouldReturn401_WhenTokenExpired (0.29s)
+=== RUN   TestJWTMiddleware_ShouldReturn401_WhenWrongIssuer
+2026/04/12 15:41:19 audit emit error [file.download /files/bucket/key]: kafka down
+--- PASS: TestJWTMiddleware_ShouldReturn401_WhenWrongIssuer (0.57s)
+=== RUN   TestJWTMiddleware_ShouldPassThrough_WhenValidToken
+--- PASS: TestJWTMiddleware_ShouldPassThrough_WhenValidToken (0.24s)
+=== RUN   TestJWTMiddleware_ShouldAcceptQueryParamToken_ForStreamEndpoints
+--- PASS: TestJWTMiddleware_ShouldAcceptQueryParamToken_ForStreamEndpoints (0.06s)
+=== RUN   TestNoopContentProducer_ShouldNotError_WhenEmitCalled
+--- PASS: TestNoopContentProducer_ShouldNotError_WhenEmitCalled (0.00s)
+=== RUN   TestNoopContentProducer_ShouldNotError_WhenCloseCalled
+--- PASS: TestNoopContentProducer_ShouldNotError_WhenCloseCalled (0.00s)
+=== RUN   TestKafkaContentProducer_ShouldEmitContentEvent_WhenCalled
+--- PASS: TestKafkaContentProducer_ShouldEmitContentEvent_WhenCalled (0.00s)
+=== RUN   TestKafkaContentProducer_ShouldReturnError_WhenWriterFails
+--- PASS: TestKafkaContentProducer_ShouldReturnError_WhenWriterFails (0.00s)
+FAIL
+FAIL	codirs/backend/internal/uploader	2.657s
+FAIL

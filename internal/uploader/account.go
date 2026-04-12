@@ -35,31 +35,28 @@ func (a *App) DeleteAccountHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Step 1: Hard-delete all owned MinIO buckets.
-	// AllowedBuckets may be stale — sub-buckets created after the last token refresh
-	// are not yet in the JWT. We augment with a live MinIO scan so that orphaned
-	// sub-buckets (e.g. parent--child created seconds before account delete) are
-	// also cleaned up.
+	// Use the central registry in go-shares as the source of truth.
 	bucketsToDelete := make(map[string]struct{})
+
+	if a.Shares != nil {
+		registered, err := a.Shares.GetBucketsByUser(ctx, claims.Subject)
+		if err != nil {
+			log.Printf("account delete: failed to fetch buckets from registry: %v (falling back to JWT/scan)", err)
+		} else {
+			for _, b := range registered {
+				bucketsToDelete[b] = struct{}{}
+			}
+		}
+	}
+
+	// Fallback/Augment: include buckets from JWT just in case registry call failed
 	for _, b := range claims.AllowedBuckets {
 		if b != "*" {
 			bucketsToDelete[b] = struct{}{}
 		}
 	}
 
-	if claims.Role != "admin" { // admin wildcard matches every bucket — skip scan to avoid wiping all of MinIO
-		listOut, listErr := a.S3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
-		if listErr != nil {
-			log.Printf("account delete: ListBuckets for stale-JWT discovery: %v (JWT-only fallback)", listErr)
-		} else {
-			for _, b := range listOut.Buckets {
-				if name := aws.ToString(b.Name); name != "" && claims.OwnsBucket(name) {
-					bucketsToDelete[name] = struct{}{}
-				}
-			}
-		}
-	}
-
-	// NOTE: v1 known limit — DeleteObjects handles up to 1000 objects per bucket.
+	// Step 2: Perform deletion
 	for bucket := range bucketsToDelete {
 		if err := a.hardDeleteBucket(ctx, bucket); err != nil {
 			log.Printf("account delete: MinIO bucket %q: %v", bucket, err)
@@ -75,12 +72,14 @@ func (a *App) DeleteAccountHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Step 2: Remove all share records (best-effort).
+	// Step 3: Remove all share records (best-effort).
 	if a.Shares != nil {
 		a.Shares.DeleteUserShares(ctx, claims.Subject, claims.Email)
+		// Clean up the bucket registrations in go-shares too
+		_ = a.Shares.DeleteUserBuckets(ctx, claims.Subject)
 	}
 
-	// Step 3: Delete Keycloak account (best-effort — data is already gone).
+	// Step 4: Delete Keycloak account (best-effort — data is already gone).
 	if a.KeycloakGranter != nil {
 		if err := a.KeycloakGranter.DeleteUser(ctx, claims.Subject); err != nil {
 			log.Printf("account delete: Keycloak user %s: %v", claims.Subject, err)

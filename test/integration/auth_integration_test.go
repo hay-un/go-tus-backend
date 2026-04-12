@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"music-streaming/backend/internal/uploader"
+	"codirs/backend/internal/uploader"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ func TestAuthMiddleware_ShouldReturn200_WhenValidTokenPresent(t *testing.T) {
 	os.Setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
 	os.Setenv("S3_ENDPOINT", "http://localhost:9000")
 	os.Setenv("AWS_REGION", "us-east-1")
-	os.Setenv("S3_BUCKET", "music-streaming-bucket")
+	os.Setenv("S3_BUCKET", "codirs-buckets")
 
 	privKey := generateAuthTestKey(t)
 	jwksSrv := startMockJWKSServer(t, &privKey.PublicKey)

@@ -909,13 +909,13 @@ func TestCreateBucketHandler_ShouldReturn201WithFullName_WhenUserOwnsParentBucke
 	mockS3 := new(MockS3Client)
 	app := newTestApp(mockS3)
 
-	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
-		return aws.ToString(in.Bucket) == "john-files--work"
-	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(in *s3.HeadObjectInput) bool {
+		return aws.ToString(in.Bucket) == "john-files" && aws.ToString(in.Key) == "work/.keep"
+	}), mock.Anything).Return(nil, &types.NotFound{})
 
-	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
-		return aws.ToString(in.Bucket) == "john-files--work"
-	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+	mockS3.On("PutObject", mock.Anything, mock.MatchedBy(func(in *s3.PutObjectInput) bool {
+		return aws.ToString(in.Bucket) == "john-files" && aws.ToString(in.Key) == "work/.keep"
+	}), mock.Anything).Return(&s3.PutObjectOutput{}, nil)
 
 	body := `{"name":"work","parent":"john-files"}`
 	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
@@ -929,7 +929,7 @@ func TestCreateBucketHandler_ShouldReturn201WithFullName_WhenUserOwnsParentBucke
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	var resp map[string]interface{}
 	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
-	assert.Equal(t, "john-files--work", resp["name"], "response name must be the full MinIO bucket name")
+	assert.Equal(t, "work", resp["name"])
 	assert.NotEmpty(t, resp["created_at"])
 	mockS3.AssertExpectations(t)
 }
@@ -970,6 +970,30 @@ func TestCreateBucketHandler_ShouldReturn401_WhenNoAuthAndParentProvided(t *test
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 	assert.Contains(t, rr.Body.String(), "authentication required")
 	mockS3.AssertNotCalled(t, "CreateBucket")
+}
+
+func TestCreateBucketHandler_ShouldReturn409_WhenSubBucketAlreadyExists(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(in *s3.HeadObjectInput) bool {
+		return aws.ToString(in.Bucket) == "john-files" && aws.ToString(in.Key) == "work/.keep"
+	}), mock.Anything).Return(&s3.HeadObjectOutput{}, nil)
+
+	body := `{"name":"work","parent":"john-files"}`
+	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
+	req = withUserClaims(req, []string{"john-files"})
+	rr := httptest.NewRecorder()
+
+	// Act
+	app.BucketsHandler(rr, req)
+
+	// Assert
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assert.Contains(t, rr.Body.String(), "already exists")
+	mockS3.AssertNotCalled(t, "PutObject")
+	mockS3.AssertExpectations(t)
 }
 
 // TestListBucketsHandler_ShouldIncludeSubBucket_WhenUserOwnsParentBucket guards the
@@ -1021,16 +1045,13 @@ func TestCreateBucketHandler_ShouldCallGrantBucket_WhenCreatingSubBucket(t *test
 	mockGranter := new(MockKeycloakGranter)
 	app.KeycloakGranter = mockGranter
 
-	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
-		return aws.ToString(in.Bucket) == "john-files--level-1"
-	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(in *s3.HeadObjectInput) bool {
+		return aws.ToString(in.Bucket) == "john-files" && aws.ToString(in.Key) == "level-1/.keep"
+	}), mock.Anything).Return(nil, &types.NotFound{})
 
-	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
-		return aws.ToString(in.Bucket) == "john-files--level-1"
-	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
-
-	mockGranter.On("GrantBucket", mock.Anything, "user@test.com", "john-files--level-1").
-		Return(nil)
+	mockS3.On("PutObject", mock.Anything, mock.MatchedBy(func(in *s3.PutObjectInput) bool {
+		return aws.ToString(in.Bucket) == "john-files" && aws.ToString(in.Key) == "level-1/.keep"
+	}), mock.Anything).Return(&s3.PutObjectOutput{}, nil)
 
 	body := `{"name":"level-1","parent":"john-files"}`
 	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
@@ -1043,7 +1064,7 @@ func TestCreateBucketHandler_ShouldCallGrantBucket_WhenCreatingSubBucket(t *test
 	// Assert
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	mockS3.AssertExpectations(t)
-	mockGranter.AssertExpectations(t)
+	mockGranter.AssertNotCalled(t, "GrantBucket") // Folders don't need explicit grants
 }
 
 func TestCreateBucketHandler_ShouldNotCallGrantBucket_WhenCreatingTopLevelBucket(t *testing.T) {
@@ -1086,16 +1107,16 @@ func TestCreateBucketHandler_ShouldAllowSubBucket_WhenJWTHasNoAllowedBucketsButP
 	// bucketExists check for the parent (fallback ownership path)
 	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
 		return aws.ToString(in.Bucket) == "ridho-files"
-	}), mock.Anything).Return(nil, nil)
+	}), mock.Anything).Return(&s3.HeadBucketOutput{}, nil)
 
-	// bucketExists check for the new sub-bucket (duplicate check)
-	mockS3.On("HeadBucket", mock.Anything, mock.MatchedBy(func(in *s3.HeadBucketInput) bool {
-		return aws.ToString(in.Bucket) == "ridho-files--work"
-	}), mock.Anything).Return(nil, &types.NoSuchBucket{})
+	// bucketExists check for the new sub-folder (duplicate check)
+	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(in *s3.HeadObjectInput) bool {
+		return aws.ToString(in.Bucket) == "ridho-files" && aws.ToString(in.Key) == "work/.keep"
+	}), mock.Anything).Return(nil, &types.NotFound{})
 
-	mockS3.On("CreateBucket", mock.Anything, mock.MatchedBy(func(in *s3.CreateBucketInput) bool {
-		return aws.ToString(in.Bucket) == "ridho-files--work"
-	}), mock.Anything).Return(&s3.CreateBucketOutput{}, nil)
+	mockS3.On("PutObject", mock.Anything, mock.MatchedBy(func(in *s3.PutObjectInput) bool {
+		return aws.ToString(in.Bucket) == "ridho-files" && aws.ToString(in.Key) == "work/.keep"
+	}), mock.Anything).Return(&s3.PutObjectOutput{}, nil)
 
 	body := `{"name":"work","parent":"ridho-files"}`
 	req, _ := http.NewRequest(http.MethodPost, "/buckets", strings.NewReader(body))
@@ -1111,7 +1132,7 @@ func TestCreateBucketHandler_ShouldAllowSubBucket_WhenJWTHasNoAllowedBucketsButP
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	var resp map[string]interface{}
 	assert.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
-	assert.Equal(t, "ridho-files--work", resp["name"])
+	assert.Equal(t, "work", resp["name"])
 	mockS3.AssertExpectations(t)
 }
 

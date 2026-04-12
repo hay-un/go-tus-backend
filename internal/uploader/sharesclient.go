@@ -777,3 +777,100 @@ func (s *SharesClient) DeleteFileVersion(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// ── Bucket Registry ──────────────────────────────────────────────────────────
+
+// RegisterBucket registers a bucket and its owner in the central registry.
+func (s *SharesClient) RegisterBucket(ctx context.Context, name, ownerUserID string) error {
+	payload := fmt.Sprintf(`{"name":%q,"ownerUserId":%q}`, name, ownerUserID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.baseURL+"/internal/registry/buckets",
+		jsonReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares registry returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// GetBucketsByUser returns all buckets registered to a specific owner.
+func (s *SharesClient) GetBucketsByUser(ctx context.Context, userID string) ([]string, error) {
+	endpoint := fmt.Sprintf("%s/internal/registry/buckets?ownerId=%s", s.baseURL, url.QueryEscape(userID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("go-shares registry returned %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Data []string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body.Data, nil
+}
+
+// DeleteUserBuckets removes all bucket registration records for a user.
+func (s *SharesClient) DeleteUserBuckets(ctx context.Context, userID string) error {
+	endpoint := fmt.Sprintf("%s/internal/registry/buckets/user/%s", s.baseURL, url.PathEscape(userID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares registry returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// DeleteBucketRegistration removes a single bucket registration.
+func (s *SharesClient) DeleteBucketRegistration(ctx context.Context, name string) error {
+	endpoint := fmt.Sprintf("%s/internal/registry/buckets/%s", s.baseURL, url.PathEscape(name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Internal-Secret", s.secret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("go-shares registry returned %d", resp.StatusCode)
+	}
+	return nil
+}

@@ -228,7 +228,39 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Full MinIO bucket name: "{parent}--{child}"
-		body.Name = body.Parent + "--" + body.Name
+		// body.Name = body.Parent + "--" + body.Name
+
+		// V2: Create virtual folder prefix in the parent bucket
+		key := body.Name + "/.keep"
+
+		// Check if folder already exists
+		_, err := a.S3Client.HeadObject(r.Context(), &s3.HeadObjectInput{
+			Bucket: aws.String(body.Parent),
+			Key:    aws.String(key),
+		})
+		if err == nil {
+			jsonError(w, "bucket (folder) already exists", http.StatusConflict)
+			return
+		}
+
+		_, err = a.S3Client.PutObject(r.Context(), &s3.PutObjectInput{
+			Bucket: aws.String(body.Parent),
+			Key:    aws.String(key),
+			Body:   strings.NewReader(""),
+		})
+		if err != nil {
+			jsonError(w, fmt.Sprintf("failed to create virtual folder: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(struct {
+			Name      string    `json:"name"`
+			CreatedAt time.Time `json:"created_at"`
+		}{Name: body.Name, CreatedAt: time.Now().UTC()})
+		emitAudit(a, r, "folder.create", "/folders/"+body.Parent+"/"+body.Name, http.StatusCreated)
+		return
 	} else {
 		// Top-level bucket: requires admin role
 		if hasClaims && claims.Role != "admin" {
@@ -258,6 +290,11 @@ func (a *App) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		jsonError(w, fmt.Sprintf("failed to create bucket: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// Central Registry: track ownership
+	if a.Shares != nil && hasClaims && claims.Subject != "" {
+		_ = a.Shares.RegisterBucket(r.Context(), body.Name, claims.Subject)
 	}
 
 	// Set MinIO lifecycle rule for __trash__/ prefix auto-expiry.
@@ -372,6 +409,11 @@ func (a *App) deleteBucketHandler(w http.ResponseWriter, r *http.Request, name s
 	}); err != nil {
 		jsonError(w, fmt.Sprintf("failed to delete bucket: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// Remove from central registry
+	if a.Shares != nil {
+		_ = a.Shares.DeleteBucketRegistration(r.Context(), name)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -598,4 +640,3 @@ func (a *App) setTrashLifecycleRule(ctx context.Context, bucket string) {
 		_ = err
 	}
 }
-

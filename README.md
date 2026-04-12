@@ -1,6 +1,6 @@
 # Go TUS Backend
 
-This is the backend service handling resumable uploads for the music streaming platform using the [TUS protocol](https://tus.io/) and MinIO as the storage backend.
+This is the backend service handling resumable uploads for the self-hosted file storage system using the [TUS protocol](https://tus.io/) and MinIO as the storage backend.
 
 ## Prerequisites
 

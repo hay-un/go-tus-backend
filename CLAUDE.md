@@ -6,7 +6,7 @@
 ## Service purpose
 
 TUS upload server, file download/streaming, bucket CRUD, and share proxy to go-shares. Port 8080.
-Module: `github.com/ridho-pratama-putra/go-tus-backend`
+Module: `codirs/backend`
 
 ## Key patterns
 
@@ -23,7 +23,7 @@ Module: `github.com/ridho-pratama-putra/go-tus-backend`
 ## Commands
 
 ```bash
-make test                # unit tests (63)
+make test                # unit tests (~346)
 make test-coverage       # HTML coverage report
 make test-integration    # needs MinIO + Keycloak running
 go run cmd/server/main.go

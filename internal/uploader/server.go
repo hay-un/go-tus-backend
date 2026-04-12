@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/redis/go-redis/v9"
 	"github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/s3store"
 )
@@ -37,6 +38,7 @@ type S3API interface {
 	CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 	PutBucketLifecycleConfiguration(ctx context.Context, params *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
 	PutBucketEncryption(ctx context.Context, params *s3.PutBucketEncryptionInput, optFns ...func(*s3.Options)) (*s3.PutBucketEncryptionOutput, error)
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 }
 
 // App holds the dependencies for the uploader service.
@@ -54,6 +56,7 @@ type App struct {
 	TrashRetentionDays int             // 0 = no lifecycle rule set on bucket creation
 	MaxFileVersions    int             // 0 = unlimited; default 5
 	tusHandlers        sync.Map        // map[string]*tusEntry — per-user-bucket TUS handlers
+	Redis              *redis.Client   // nil when REDIS_URL not configured
 }
 
 // tusEntry pairs the stripped http.Handler with the raw *handler.Handler
@@ -185,7 +188,18 @@ func NewAppFromEnv() (*App, error) {
 		Content:            &NoopContentProducer{},
 		TrashRetentionDays: trashRetentionDays,
 		MaxFileVersions:    maxFileVersions,
+		Redis:              initRedis(),
 	}, nil
+}
+
+func initRedis() *redis.Client {
+	addr := os.Getenv("REDIS_URL")
+	if addr == "" {
+		return nil
+	}
+	return redis.NewClient(&redis.Options{
+		Addr: addr,
+	})
 }
 
 // NewTusHandler creates a Tus handler pointed at the root bucket (legacy/fallback).
@@ -253,6 +267,12 @@ func (a *App) GetTusHandlerForBucket(bucket string) (http.Handler, error) {
 				meta := event.Upload.MetaData
 				filename, _ := meta["filename"]
 				filetype, _ := meta["filetype"]
+				// Invalidate metadata cache on new upload
+				if a.Redis != nil {
+					key := fmt.Sprintf("meta:%s:%s", bucket, event.Upload.ID)
+					a.Redis.Del(context.Background(), key)
+				}
+
 				_ = a.Content.EmitContent(context.Background(), ContentEvent{
 					Bucket:      bucket,
 					Key:         event.Upload.ID,
@@ -459,8 +479,12 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	prefix := r.URL.Query().Get("prefix")
+
 	output, err := a.S3Client.ListObjectsV2(r.Context(), &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket),
+		Bucket:    aws.String(bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String("/"),
 	})
 	if err != nil {
 		if isBucketNotFound(err) {
@@ -478,32 +502,34 @@ func (a *App) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 		LastModified time.Time `json:"lastModified"`
 		URL          string    `json:"url"`
 		StreamURL    string    `json:"streamUrl"`
+		IsFolder     bool      `json:"isFolder"`
 	}
 
 	files := make([]FileInfo, 0)
+
+	// Add Folders from CommonPrefixes
+	for _, cp := range output.CommonPrefixes {
+		p := aws.ToString(cp.Prefix)
+		name := strings.TrimSuffix(strings.TrimPrefix(p, prefix), "/")
+		files = append(files, FileInfo{
+			Key:      p,
+			Name:     name,
+			IsFolder: true,
+		})
+	}
+
+	// Add Files from Contents
 	for _, obj := range output.Contents {
 		key := aws.ToString(obj.Key)
-		// Skip .info sidecar files, empty keys, and files in trash
-		if key == "" || strings.HasSuffix(key, ".info") || strings.HasPrefix(key, "__trash__/") {
+		// Skip .info sidecar files, empty keys, files in trash, and .keep markers
+		if key == "" || strings.HasSuffix(key, ".info") || strings.HasPrefix(key, "__trash__/") || strings.HasSuffix(key, "/.keep") || key == prefix {
 			continue
 		}
 
-		// Try to read original filename from TUS .info sidecar
-		name := key
-		infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(key + ".info"),
-		})
-		if err == nil {
-			var info struct {
-				MetaData map[string]string `json:"MetaData"`
-			}
-			if jsonErr := json.NewDecoder(infoObj.Body).Decode(&info); jsonErr == nil {
-				if filename, ok := info.MetaData["filename"]; ok && filename != "" {
-					name = filename
-				}
-			}
-			infoObj.Body.Close()
+		// Try to read original filename from cache or TUS .info sidecar
+		name := a.fetchMetadata(r.Context(), bucket, key, "filename", key)
+		if strings.Contains(name, "/") {
+			name = name[strings.LastIndex(name, "/")+1:]
 		}
 
 		var lastModified time.Time
@@ -544,23 +570,8 @@ func (a *App) DownloadFileHandler(w http.ResponseWriter, r *http.Request, bucket
 		}
 	}
 
-	// Retrieve original filename from TUS .info sidecar (best-effort)
-	filename := key
-	infoObj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key + ".info"),
-	})
-	if err == nil {
-		var info struct {
-			MetaData map[string]string `json:"MetaData"`
-		}
-		if jsonErr := json.NewDecoder(infoObj.Body).Decode(&info); jsonErr == nil {
-			if fn, ok := info.MetaData["filename"]; ok && fn != "" {
-				filename = fn
-			}
-		}
-		infoObj.Body.Close()
-	}
+	// Retrieve original filename from cache or TUS .info sidecar (best-effort)
+	filename := a.fetchMetadata(r.Context(), bucket, key, "filename", key)
 
 	// Get the actual file object
 	obj, err := a.S3Client.GetObject(r.Context(), &s3.GetObjectInput{
@@ -646,6 +657,11 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 	}); err != nil {
 		jsonError(w, fmt.Sprintf("failed to remove original file: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// Invalidate metadata cache
+	if a.Redis != nil {
+		a.Redis.Del(r.Context(), fmt.Sprintf("meta:%s:%s", bucket, key))
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -828,4 +844,62 @@ func isObjectNotFound(err error) bool {
 func sanitizeFilename(name string) string {
 	replacer := strings.NewReplacer(`"`, `\"`, "\n", "", "\r", "")
 	return replacer.Replace(name)
+}
+
+// fetchMetadata retrieves a metadata field from Redis cache or S3 .info sidecar.
+func (a *App) fetchMetadata(ctx context.Context, bucket, key, field, fallback string) string {
+	if a.Redis == nil {
+		return a.fetchMetadataFromS3(ctx, bucket, key, field, fallback)
+	}
+
+	cacheKey := fmt.Sprintf("meta:%s:%s", bucket, key)
+	val, err := a.Redis.HGet(ctx, cacheKey, field).Result()
+	if err == nil && val != "" {
+		return val
+	}
+
+	// Cache miss: fetch all metadata from S3 and cache it
+	meta := a.fetchAllMetadataFromS3(ctx, bucket, key)
+	if meta != nil {
+		// Cache for 24 hours (metadata usually doesn't change unless replaced)
+		pipe := a.Redis.Pipeline()
+		for k, v := range meta {
+			pipe.HSet(ctx, cacheKey, k, v)
+		}
+		pipe.Expire(ctx, cacheKey, 24*time.Hour)
+		pipe.Exec(ctx) //nolint:errcheck
+
+		if v, ok := meta[field]; ok && v != "" {
+			return v
+		}
+	}
+
+	return fallback
+}
+
+func (a *App) fetchAllMetadataFromS3(ctx context.Context, bucket, key string) map[string]string {
+	infoObj, err := a.S3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key + ".info"),
+	})
+	if err != nil {
+		return nil
+	}
+	defer infoObj.Body.Close()
+
+	var info struct {
+		MetaData map[string]string `json:"MetaData"`
+	}
+	if err := json.NewDecoder(infoObj.Body).Decode(&info); err != nil {
+		return nil
+	}
+	return info.MetaData
+}
+
+func (a *App) fetchMetadataFromS3(ctx context.Context, bucket, key, field, fallback string) string {
+	meta := a.fetchAllMetadataFromS3(ctx, bucket, key)
+	if v, ok := meta[field]; ok && v != "" {
+		return v
+	}
+	return fallback
 }

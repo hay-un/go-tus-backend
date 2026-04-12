@@ -10,7 +10,7 @@ import (
 
 	"github.com/segmentio/kafka-go"
 
-	"music-streaming/backend/internal/uploader"
+	"codirs/backend/internal/uploader"
 )
 
 func main() {

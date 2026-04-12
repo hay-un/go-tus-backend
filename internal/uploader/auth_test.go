@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"music-streaming/backend/internal/uploader"
+	"codirs/backend/internal/uploader"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
