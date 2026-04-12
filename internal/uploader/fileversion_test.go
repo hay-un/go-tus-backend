@@ -3,6 +3,7 @@ package uploader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -678,4 +679,334 @@ func TestSharesClientDeleteFileVersion_ShouldError_WhenServerFails(t *testing.T)
 
 	// Assert
 	require.Error(t, err)
+}
+
+// ── ArchiveFileVersionHandler — error paths ───────────────────────────────────
+
+func TestArchiveFileVersionHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadObjectOutput{}, &types.NoSuchKey{})
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/missing-uuid/version", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ArchiveFileVersionHandler(w, r, "my-bucket", "missing-uuid")
+
+	// Assert
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestArchiveFileVersionHandler_ShouldReturn500_WhenHeadObjectFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadObjectOutput{}, errors.New("s3 unavailable"))
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/file-uuid/version", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ArchiveFileVersionHandler(w, r, "my-bucket", "file-uuid")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestArchiveFileVersionHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadObjectOutput{ContentLength: aws.Int64(1024)}, nil)
+	mockS3.On("GetObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(`{"MetaData":{"filename":"f.pdf"}}`))}, nil)
+	mockS3.On("CopyObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.CopyObjectOutput{}, errors.New("copy failed"))
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/file-uuid/version", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ArchiveFileVersionHandler(w, r, "my-bucket", "file-uuid")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestArchiveFileVersionHandler_ShouldReturn500_WhenDeleteObjectsFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadObjectOutput{ContentLength: aws.Int64(512)}, nil)
+	mockS3.On("GetObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(`{"MetaData":{"filename":"f.pdf"}}`))}, nil)
+	mockS3.On("CopyObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.CopyObjectOutput{}, nil)
+	mockS3.On("DeleteObjects", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.DeleteObjectsOutput{}, errors.New("delete failed"))
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/file-uuid/version", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ArchiveFileVersionHandler(w, r, "my-bucket", "file-uuid")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestArchiveFileVersionHandler_ShouldReturn500_WhenCreateFileVersionFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.HeadObjectOutput{ContentLength: aws.Int64(512)}, nil)
+	mockS3.On("GetObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(`{"MetaData":{"filename":"f.pdf"}}`))}, nil)
+	mockS3.On("CopyObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.CopyObjectOutput{}, nil)
+	mockS3.On("DeleteObjects", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.DeleteObjectsOutput{}, nil)
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/file-uuid/version", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ArchiveFileVersionHandler(w, r, "my-bucket", "file-uuid")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── ListFileVersionsHandler — error paths ────────────────────────────────────
+
+func TestListFileVersionsHandler_ShouldReturn403_WhenAccessDenied(t *testing.T) {
+	// Arrange
+	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient("http://unused", "secret")}
+
+	r := httptest.NewRequest(http.MethodGet, "/files/my-bucket/versions?filename=report.pdf", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"other-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ListFileVersionsHandler(w, r, "my-bucket")
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestListFileVersionsHandler_ShouldReturn500_WhenSharesFails(t *testing.T) {
+	// Arrange
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		Audit:  &NoopAuditProducer{},
+		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/files/my-bucket/versions?filename=report.pdf", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.ListFileVersionsHandler(w, r, "my-bucket")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── RestoreFileVersionHandler — error paths ──────────────────────────────────
+
+func TestRestoreFileVersionHandler_ShouldReturn403_WhenAccessDenied(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient("http://unused", "secret"),
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/versions/ver-1/restore", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"other-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileVersionHandler(w, r, "my-bucket", "ver-1")
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRestoreFileVersionHandler_ShouldReturn500_WhenListObjectsV2Fails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListObjectsV2Output{}, errors.New("s3 error"))
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/versions/ver-1/restore", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileVersionHandler(w, r, "my-bucket", "ver-1")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestRestoreFileVersionHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "file-versions"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+				"data": []FileVersionRecord{
+					{ID: "ver-1", Bucket: "my-bucket", Filename: "report.pdf", S3Key: "old-uuid", VersionNum: 1},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": []FileVersionRecord{}}) //nolint:errcheck
+		}
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListObjectsV2Output{
+			Contents: []types.Object{
+				{Key: aws.String("__versions__/old-uuid.info")},
+			},
+		}, nil)
+	mockS3.On("GetObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.GetObjectOutput{
+			Body: io.NopCloser(strings.NewReader(`{"MetaData":{"filename":"report.pdf"}}`)),
+		}, nil)
+	mockS3.On("CopyObject", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.CopyObjectOutput{}, errors.New("copy failed"))
+
+	r := httptest.NewRequest(http.MethodPost, "/files/my-bucket/versions/ver-1/restore", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.RestoreFileVersionHandler(w, r, "my-bucket", "ver-1")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── DeleteFileVersionHandler — error paths ───────────────────────────────────
+
+func TestDeleteFileVersionHandler_ShouldReturn403_WhenAccessDenied(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient("http://unused", "secret"),
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/files/my-bucket/versions/ver-1", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"other-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.DeleteFileVersionHandler(w, r, "my-bucket", "ver-1")
+
+	// Assert
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestDeleteFileVersionHandler_ShouldReturn500_WhenListObjectsV2Fails(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer sharesServer.Close()
+	app := &App{
+		S3Client: mockS3,
+		Audit:    &NoopAuditProducer{},
+		Shares:   NewSharesClient(sharesServer.URL, "test-secret"),
+	}
+	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return(&s3.ListObjectsV2Output{}, errors.New("s3 error"))
+
+	r := httptest.NewRequest(http.MethodDelete, "/files/my-bucket/versions/ver-1", nil)
+	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"my-bucket"}})
+	w := httptest.NewRecorder()
+
+	// Act
+	app.DeleteFileVersionHandler(w, r, "my-bucket", "ver-1")
+
+	// Assert
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

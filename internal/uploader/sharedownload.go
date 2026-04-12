@@ -3,7 +3,6 @@ package uploader
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -137,34 +136,4 @@ func (a *App) handleShareDownload(w http.ResponseWriter, r *http.Request, id str
 	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
 		"downloadUrl": presigned.URL,
 	})
-}
-
-// resolveFileName attempts to read the TUS .info sidecar file to get the original filename.
-// Falls back to the fileKey if not found.
-func (a *App) resolveFileName(ctx context.Context, bucket, fileKey string) string {
-	infoKey := fileKey + ".info"
-	result, err := a.S3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(infoKey),
-	})
-	if err != nil {
-		return fileKey
-	}
-	defer result.Body.Close()
-
-	data, err := io.ReadAll(result.Body)
-	if err != nil {
-		return fileKey
-	}
-
-	var info struct {
-		MetaData map[string]string `json:"MetaData"`
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
-		return fileKey
-	}
-	if name, ok := info.MetaData["filename"]; ok && name != "" {
-		return name
-	}
-	return fileKey
 }
