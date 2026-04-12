@@ -327,6 +327,60 @@ func TestHardDeleteBucket_ShouldDeleteObjectsAndBucket_WhenObjectsExist(t *testi
 	mockS3.AssertExpectations(t)
 }
 
+func TestHardDeleteBucket_ShouldDeleteMultiplePages_WhenManyObjectsExist(t *testing.T) {
+	// Arrange
+	mockS3 := new(MockS3Client)
+	app := newTestApp(mockS3)
+	bucketName := "big-bucket"
+
+	// First page: 1000 objects, truncated
+	objs1 := make([]types.Object, 1000)
+	ids1 := make([]types.ObjectIdentifier, 1000)
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("file-%d", i)
+		objs1[i] = types.Object{Key: aws.String(key)}
+		ids1[i] = types.ObjectIdentifier{Key: aws.String(key)}
+	}
+
+	mockS3.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucketName),
+	}, mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents:              objs1,
+		IsTruncated:           aws.Bool(true),
+		NextContinuationToken: aws.String("token-1"),
+	}, nil).Once()
+
+	mockS3.On("DeleteObjects", mock.Anything, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucketName),
+		Delete: &types.Delete{Objects: ids1},
+	}, mock.Anything).Return(&s3.DeleteObjectsOutput{}, nil).Once()
+
+	// Second page: 1 object, not truncated
+	mockS3.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{
+		Bucket:            aws.String(bucketName),
+		ContinuationToken: aws.String("token-1"),
+	}, mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents:    []types.Object{{Key: aws.String("last-file")}},
+		IsTruncated: aws.Bool(false),
+	}, nil).Once()
+
+	mockS3.On("DeleteObjects", mock.Anything, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucketName),
+		Delete: &types.Delete{Objects: []types.ObjectIdentifier{{Key: aws.String("last-file")}}},
+	}, mock.Anything).Return(&s3.DeleteObjectsOutput{}, nil).Once()
+
+	mockS3.On("DeleteBucket", mock.Anything, &s3.DeleteBucketInput{
+		Bucket: aws.String(bucketName),
+	}, mock.Anything).Return(&s3.DeleteBucketOutput{}, nil).Once()
+
+	// Act
+	err := app.hardDeleteBucket(context.Background(), bucketName)
+
+	// Assert
+	assert.NoError(t, err)
+	mockS3.AssertExpectations(t)
+}
+
 func TestHardDeleteBucket_ShouldSkipDeleteObjects_WhenBucketEmpty(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)

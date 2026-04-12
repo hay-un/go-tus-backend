@@ -96,26 +96,30 @@ func (a *App) DeleteAccountHandler(w http.ResponseWriter, r *http.Request) {
 // hardDeleteBucket removes all objects inside a bucket and then deletes the bucket itself.
 // It is a no-op if the bucket does not exist.
 func (a *App) hardDeleteBucket(ctx context.Context, name string) error {
-	listOut, err := a.S3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(a.S3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(name),
 	})
-	if err != nil {
-		if isBucketNotFound(err) {
-			return nil
-		}
-		return err
-	}
 
-	if len(listOut.Contents) > 0 {
-		objectIDs := make([]types.ObjectIdentifier, 0, len(listOut.Contents))
-		for _, obj := range listOut.Contents {
-			objectIDs = append(objectIDs, types.ObjectIdentifier{Key: obj.Key})
-		}
-		if _, err := a.S3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(name),
-			Delete: &types.Delete{Objects: objectIDs},
-		}); err != nil {
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			if isBucketNotFound(err) {
+				return nil
+			}
 			return err
+		}
+
+		if len(page.Contents) > 0 {
+			objectIDs := make([]types.ObjectIdentifier, 0, len(page.Contents))
+			for _, obj := range page.Contents {
+				objectIDs = append(objectIDs, types.ObjectIdentifier{Key: obj.Key})
+			}
+			if _, err := a.S3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(name),
+				Delete: &types.Delete{Objects: objectIDs},
+			}); err != nil {
+				return err
+			}
 		}
 	}
 
