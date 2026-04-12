@@ -41,6 +41,7 @@ func newShareAppWithShares(mockS3 *MockS3Client, sharesURL string) *App {
 		S3Client: mockS3,
 		Shares:   NewSharesClient(sharesURL, ""),
 		Audit:    &NoopAuditProducer{},
+		Content:  &NoopContentProducer{},
 	}
 }
 

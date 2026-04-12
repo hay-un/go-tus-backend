@@ -37,6 +37,22 @@ func main() {
 	}
 	app.Audit = audit
 
+	// ── Content producer ──────────────────────────────────────────────────────
+	var contentProducer uploader.ContentProducer
+	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+		contentTopic := os.Getenv("CONTENT_KAFKA_TOPIC")
+		if contentTopic == "" {
+			contentTopic = "codirs-content"
+		}
+		contentProducer = uploader.NewKafkaContentProducer(strings.Split(brokers, ","), contentTopic)
+		defer contentProducer.Close() //nolint:errcheck
+		log.Printf("Kafka content producer connected to %s (topic: %s)", brokers, contentTopic)
+	} else {
+		contentProducer = &uploader.NoopContentProducer{}
+		log.Println("Kafka not configured — content events discarded (NoopContentProducer)")
+	}
+	app.Content = contentProducer
+
 	// ── Keycloak granter (sets allowed_buckets attribute after provisioning) ──
 	keycloakGranter := uploader.NewHTTPKeycloakGranter(
 		os.Getenv("KEYCLOAK_INTERNAL_ISSUER"),

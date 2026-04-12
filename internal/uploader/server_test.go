@@ -252,7 +252,7 @@ func TestTusHandler_ShouldReturn500_WhenS3IsUnavailable(t *testing.T) {
 func TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	req, _ := http.NewRequest("GET", "/files/", nil)
 	rr := httptest.NewRecorder()
@@ -269,7 +269,7 @@ func TestListFilesHandler_ShouldReturn400_WhenBucketParamIsMissing(t *testing.T)
 func TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(input *s3.ListObjectsV2Input) bool {
 		return aws.ToString(input.Bucket) == "my-videos"
@@ -304,7 +304,7 @@ func TestListFilesHandler_ShouldReturnFilesWithoutSidecars_WhenBucketExists(t *t
 func TestListFilesHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, &types.NoSuchBucket{})
@@ -325,7 +325,7 @@ func TestListFilesHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
 func TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	fileContent := "hello world"
 
@@ -360,7 +360,7 @@ func TestDownloadFileHandler_ShouldStreamFileWithOriginalName_WhenFileExists(t *
 func TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("GetObject", mock.Anything, mock.MatchedBy(func(input *s3.GetObjectInput) bool {
 		return aws.ToString(input.Key) == "ghost.info"
@@ -387,7 +387,7 @@ func TestDownloadFileHandler_ShouldReturn404_WhenFileNotFound(t *testing.T) {
 func TestDeleteFileHandler_ShouldMoveFileToTrash_WhenFileExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
 		return aws.ToString(input.Bucket) == "my-bucket" && aws.ToString(input.Key) == "abc123"
@@ -431,7 +431,7 @@ func TestDeleteFileHandler_ShouldMoveFileToTrash_WhenFileExists(t *testing.T) {
 func TestDeleteFileHandler_ShouldReturn404WithoutDeletion_WhenFileNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
 		return aws.ToString(input.Key) == "ghost"
@@ -496,7 +496,7 @@ func TestExtractBucketFromTUSMetadata_ShouldDecodeBucketName_WhenMetadataIsValid
 func TestListFilesHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	req, _ := http.NewRequest("GET", "/files/?bucket=forbidden-bucket", nil)
 	// User is only allowed "my-bucket"
@@ -515,7 +515,7 @@ func TestListFilesHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
 func TestDownloadFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	req, _ := http.NewRequest("GET", "/files/forbidden-bucket/key", nil)
 	req = injectClaims(req, &Claims{AllowedBuckets: []string{"my-bucket"}, Role: "user"})
@@ -533,7 +533,7 @@ func TestDownloadFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) 
 func TestDeleteFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	req, _ := http.NewRequest("DELETE", "/files/forbidden-bucket/key", nil)
 	req = injectClaims(req, &Claims{AllowedBuckets: []string{"my-bucket"}, Role: "user"})
@@ -553,7 +553,7 @@ func TestDeleteFileHandler_ShouldReturn403_WhenBucketNotAllowed(t *testing.T) {
 func TestListFileTrashHandler_ShouldReturnTrashedFiles_WhenTrashHasFiles(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.MatchedBy(func(input *s3.ListObjectsV2Input) bool {
 		return aws.ToString(input.Bucket) == "my-bucket" && aws.ToString(input.Prefix) == "__trash__/"
@@ -587,7 +587,7 @@ func TestListFileTrashHandler_ShouldReturnTrashedFiles_WhenTrashHasFiles(t *test
 func TestListFileTrashHandler_ShouldReturnEmptyData_WhenTrashIsEmpty(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{},
@@ -610,7 +610,7 @@ func TestListFileTrashHandler_ShouldReturnEmptyData_WhenTrashIsEmpty(t *testing.
 func TestRestoreFileHandler_ShouldRestoreFile_WhenFileIsInTrash(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// File exists in trash
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
@@ -656,7 +656,7 @@ func TestRestoreFileHandler_ShouldRestoreFile_WhenFileIsInTrash(t *testing.T) {
 func TestRestoreFileHandler_ShouldReturn404_WhenFileNotInTrash(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
 		return aws.ToString(input.Key) == "__trash__/ghost"
@@ -677,7 +677,7 @@ func TestRestoreFileHandler_ShouldReturn404_WhenFileNotInTrash(t *testing.T) {
 func TestRestoreFileHandler_ShouldReturn409_WhenOriginalFileExists(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// File in trash
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
@@ -727,7 +727,7 @@ func TestIsHomeBucket_ShouldReturnFalse_WhenAtSignIsAtStart(t *testing.T) {
 func TestDeleteFileHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "default-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "default-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// HeadObject succeeds (file exists)
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
@@ -751,7 +751,7 @@ func TestDeleteFileHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
 func TestDeleteFileHandler_ShouldReturn500_WhenHeadObjectFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "default-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "default-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// HeadObject returns generic error (not a not-found)
 	mockS3.On("HeadObject", mock.Anything, mock.Anything, mock.Anything).
@@ -773,7 +773,7 @@ func TestDeleteFileHandler_ShouldReturn500_WhenHeadObjectFails(t *testing.T) {
 func TestListFileTrashHandler_ShouldReturn500_WhenListObjectsFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, errors.New("s3 internal error"))
@@ -792,7 +792,7 @@ func TestListFileTrashHandler_ShouldReturn500_WhenListObjectsFails(t *testing.T)
 func TestListFileTrashHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, &types.NoSuchBucket{})
@@ -813,7 +813,7 @@ func TestListFileTrashHandler_ShouldReturn404_WhenBucketNotFound(t *testing.T) {
 func TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForTrashFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// HeadObject for trash key returns generic error (not not-found)
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
@@ -834,7 +834,7 @@ func TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForTrashFails(t *testi
 func TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForOriginalFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// File exists in trash
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {
@@ -860,7 +860,7 @@ func TestRestoreFileHandler_ShouldReturn500_WhenHeadObjectForOriginalFails(t *te
 func TestRestoreFileHandler_ShouldReturn500_WhenCopyObjectFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, BucketName: "root-bucket", S3Endpoint: "http://localhost:9000", Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// File in trash
 	mockS3.On("HeadObject", mock.Anything, mock.MatchedBy(func(input *s3.HeadObjectInput) bool {

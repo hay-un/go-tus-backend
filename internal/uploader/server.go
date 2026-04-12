@@ -43,16 +43,24 @@ type S3API interface {
 type App struct {
 	TusHandler         http.Handler
 	S3Client           S3API
-	Presigner          Presigner       // nil when S3 client not yet initialized
+	Presigner          Presigner // nil when S3 client not yet initialized
 	BucketName         string
 	S3Endpoint         string
 	Audit              AuditProducer   // never nil; use NoopAuditProducer in tests
+	Content            ContentProducer // nil or NoopContentProducer in tests
 	Shares             *SharesClient   // nil when GO_SHARES_URL not configured
 	KeycloakGranter    KeycloakGranter // nil when admin credentials not configured
 	VaultClient        *VaultClient    // nil when VAULT_ADDR not configured (SSE-KMS disabled)
 	TrashRetentionDays int             // 0 = no lifecycle rule set on bucket creation
 	MaxFileVersions    int             // 0 = unlimited; default 5
-	tusHandlers        sync.Map        // map[string]http.Handler — per-user-bucket TUS handlers
+	tusHandlers        sync.Map        // map[string]*tusEntry — per-user-bucket TUS handlers
+}
+
+// tusEntry pairs the stripped http.Handler with the raw *handler.Handler
+// so the CompleteUploads channel is accessible for content indexing events.
+type tusEntry struct {
+	httpHandler http.Handler
+	tusHandler  *handler.Handler
 }
 
 // canAccessBucket returns true if the given claims grant access to bucket.
@@ -174,6 +182,7 @@ func NewAppFromEnv() (*App, error) {
 		BucketName:         bucketName,
 		S3Endpoint:         s3Endpoint,
 		Audit:              &NoopAuditProducer{},
+		Content:            &NoopContentProducer{},
 		TrashRetentionDays: trashRetentionDays,
 		MaxFileVersions:    maxFileVersions,
 	}, nil
@@ -201,39 +210,63 @@ func NewTusHandler(bucketName string, s3Client s3store.S3API) (http.Handler, err
 
 // NewTusHandlerForBucket creates a Tus handler with a user-bucket-specific BasePath.
 // The returned handler expects paths like /files/<bucket>/<upload-id>.
-func NewTusHandlerForBucket(bucketName string, s3Client s3store.S3API) (http.Handler, error) {
+// Returns the stripped http.Handler, the raw *handler.Handler (for CompleteUploads channel), and any error.
+func NewTusHandlerForBucket(bucketName string, s3Client s3store.S3API) (http.Handler, *handler.Handler, error) {
 	store := s3store.New(bucketName, s3Client)
 
 	composer := handler.NewStoreComposer()
 	store.UseIn(composer)
 
 	basePath := "/files/" + bucketName + "/"
-	tusHandler, err := handler.NewHandler(handler.Config{
+	tusH, err := handler.NewHandler(handler.Config{
 		BasePath:                basePath,
 		StoreComposer:           composer,
-		NotifyCompleteUploads:   false,
+		NotifyCompleteUploads:   true,
 		RespectForwardedHeaders: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("unable to create tus handler for bucket %q: %w", bucketName, err)
+		return nil, nil, fmt.Errorf("unable to create tus handler for bucket %q: %w", bucketName, err)
 	}
 
-	return http.StripPrefix(basePath, tusHandler), nil
+	return http.StripPrefix(basePath, tusH), tusH, nil
 }
 
 // GetTusHandlerForBucket returns a cached per-bucket TUS handler, creating it if needed.
 func (a *App) GetTusHandlerForBucket(bucket string) (http.Handler, error) {
-	if h, ok := a.tusHandlers.Load(bucket); ok {
-		return h.(http.Handler), nil
+	if entry, ok := a.tusHandlers.Load(bucket); ok {
+		return entry.(*tusEntry).httpHandler, nil
 	}
 
-	h, err := NewTusHandlerForBucket(bucket, a.S3Client)
+	h, tusH, err := NewTusHandlerForBucket(bucket, a.S3Client)
 	if err != nil {
 		return nil, err
 	}
 
-	actual, _ := a.tusHandlers.LoadOrStore(bucket, h)
-	return actual.(http.Handler), nil
+	entry := &tusEntry{httpHandler: h, tusHandler: tusH}
+	actual, _ := a.tusHandlers.LoadOrStore(bucket, entry)
+	actualEntry := actual.(*tusEntry)
+
+	// Only start the goroutine for the entry that was actually stored (avoid duplicate goroutines).
+	if actualEntry == entry && a.Content != nil {
+		go func() {
+			for event := range tusH.CompleteUploads {
+				meta := event.Upload.MetaData
+				filename, _ := meta["filename"]
+				filetype, _ := meta["filetype"]
+				_ = a.Content.EmitContent(context.Background(), ContentEvent{
+					Bucket:      bucket,
+					Key:         event.Upload.ID,
+					Filename:    filename,
+					Size:        event.Upload.Size,
+					ContentType: filetype,
+					Action:      "index",
+					Timestamp:   time.Now().UTC(),
+				})
+			}
+		}()
+	}
+
+	return actualEntry.httpHandler, nil
 }
 
 // ExtractBucketFromTUSMetadata parses the Upload-Metadata header and returns the
@@ -617,6 +650,20 @@ func (a *App) DeleteFileHandler(w http.ResponseWriter, r *http.Request, bucket, 
 
 	w.WriteHeader(http.StatusNoContent)
 	emitAudit(a, r, "file.delete", "/files/"+bucket+"/"+key, http.StatusNoContent)
+
+	// Fire-and-forget: notify content indexer of deletion.
+	if a.Content != nil {
+		go func() {
+			if err := a.Content.EmitContent(context.Background(), ContentEvent{
+				Bucket:    bucket,
+				Key:       key,
+				Action:    "delete",
+				Timestamp: time.Now().UTC(),
+			}); err != nil {
+				log.Printf("content emit error [delete %s/%s]: %v", bucket, key, err)
+			}
+		}()
+	}
 
 	// Best-effort: remove shared link records so deleted files don't appear in the share history.
 	if a.Shares != nil {

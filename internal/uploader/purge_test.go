@@ -33,6 +33,7 @@ func TestProcessPurgeEvent_ShouldPurgeBucket_WhenAllSucceeds(t *testing.T) {
 	app := &App{
 		S3Client: mockS3,
 		Audit:    &NoopAuditProducer{},
+		Content:  &NoopContentProducer{},
 		Shares:   NewSharesClient(srv.URL, "test-secret"),
 	}
 
@@ -60,7 +61,7 @@ func TestProcessPurgeEvent_ShouldPurgeBucket_WhenAllSucceeds(t *testing.T) {
 
 func TestProcessPurgeEvent_ShouldReturn_WhenInvalidJSON(t *testing.T) {
 	// Arrange — invalid JSON should be silently skipped (logged)
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	// Act — should not panic
 	app.ProcessPurgeEvent(context.Background(), []byte(`{bad json`))
@@ -68,7 +69,7 @@ func TestProcessPurgeEvent_ShouldReturn_WhenInvalidJSON(t *testing.T) {
 
 func TestProcessPurgeEvent_ShouldReturn_WhenBucketNameEmpty(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	event, _ := json.Marshal(map[string]string{"bucketName": "", "ownerUserId": "user-uuid"})
 
 	// Act — should not panic
@@ -78,7 +79,7 @@ func TestProcessPurgeEvent_ShouldReturn_WhenBucketNameEmpty(t *testing.T) {
 func TestProcessPurgeEvent_ShouldReturn_WhenListObjectsFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, errors.New("connection error"))
@@ -95,7 +96,7 @@ func TestProcessPurgeEvent_ShouldReturn_WhenListObjectsFails(t *testing.T) {
 func TestProcessPurgeEvent_ShouldReturn_WhenDeleteObjectsFails(t *testing.T) {
 	// Arrange
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, Audit: &NoopAuditProducer{}}
+	app := &App{S3Client: mockS3, Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListObjectsV2Output{
@@ -123,6 +124,7 @@ func TestProcessPurgeEvent_ShouldSkipObjectDelete_WhenBucketEmpty(t *testing.T) 
 	app := &App{
 		S3Client: mockS3,
 		Audit:    &NoopAuditProducer{},
+		Content:  &NoopContentProducer{},
 		Shares:   NewSharesClient(srv.URL, "test-secret"),
 	}
 
@@ -144,7 +146,7 @@ func TestProcessPurgeEvent_ShouldSkipObjectDelete_WhenBucketEmpty(t *testing.T) 
 func TestProcessPurgeEvent_ShouldContinue_WhenSharesNil(t *testing.T) {
 	// Arrange — Shares is nil; should skip share cleanup without panic
 	mockS3 := new(MockS3Client)
-	app := &App{S3Client: mockS3, Audit: &NoopAuditProducer{}, Shares: nil}
+	app := &App{S3Client: mockS3, Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: nil}
 
 	mockS3.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListObjectsV2Output{Contents: []types.Object{}}, nil)

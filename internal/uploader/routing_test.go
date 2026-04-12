@@ -66,7 +66,7 @@ func TestParseRSAPublicKeyFromJWK_ShouldFail_WhenExponentIsZero(t *testing.T) {
 
 func TestBucketItemHandler_ShouldReturn503_WhenGetTrash(t *testing.T) {
 	// Arrange — Shares=nil → ListBucketTrashHandler returns 503
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	req := httptest.NewRequest(http.MethodGet, "/buckets/trash", nil)
 	req = injectClaims(req, &Claims{Subject: "u", Email: "u@test.com"})
 	w := httptest.NewRecorder()
@@ -80,7 +80,7 @@ func TestBucketItemHandler_ShouldReturn503_WhenGetTrash(t *testing.T) {
 
 func TestBucketItemHandler_ShouldReturn405_WhenPostToTrash(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	req := httptest.NewRequest(http.MethodPost, "/buckets/trash", nil)
 	w := httptest.NewRecorder()
 
@@ -108,7 +108,7 @@ func TestBucketItemHandler_ShouldRoute_WhenRenamePath(t *testing.T) {
 }
 
 func TestBucketItemHandler_ShouldReturn405_WhenGetToRenamePath(t *testing.T) {
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	req := httptest.NewRequest(http.MethodGet, "/buckets/my-bucket/rename", nil)
 	w := httptest.NewRecorder()
 	app.BucketItemHandler(w, req)
@@ -117,7 +117,7 @@ func TestBucketItemHandler_ShouldReturn405_WhenGetToRenamePath(t *testing.T) {
 
 func TestBucketItemHandler_ShouldReturn503_WhenPostToRestorePath(t *testing.T) {
 	// Arrange — Shares=nil → RestoreBucketHandler returns 503
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	req := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/restore", nil)
 	req = injectClaims(req, &Claims{Subject: "u", AllowedBuckets: []string{"my-bucket"}, Role: "user"})
 	w := httptest.NewRecorder()
@@ -130,7 +130,7 @@ func TestBucketItemHandler_ShouldReturn503_WhenPostToRestorePath(t *testing.T) {
 }
 
 func TestBucketItemHandler_ShouldReturn405_WhenGetToRestorePath(t *testing.T) {
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	req := httptest.NewRequest(http.MethodGet, "/buckets/my-bucket/restore", nil)
 	w := httptest.NewRecorder()
 	app.BucketItemHandler(w, req)
@@ -139,7 +139,7 @@ func TestBucketItemHandler_ShouldReturn405_WhenGetToRestorePath(t *testing.T) {
 
 func TestBucketItemHandler_ShouldRouteToSharesHandler_WhenSharesPath(t *testing.T) {
 	// Arrange — Shares=nil → SharesItemHandler returns 503
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	req := httptest.NewRequest(http.MethodGet, "/buckets/my-bucket/shares", nil)
 	req = injectClaims(req, &Claims{Subject: "u", AllowedBuckets: []string{"my-bucket"}})
 	w := httptest.NewRecorder()
@@ -170,6 +170,7 @@ func newFilesApp(mockS3 *MockS3Client) *App {
 		BucketName: "default-bucket",
 		S3Endpoint: "http://localhost:9000",
 		Audit:      &NoopAuditProducer{},
+		Content:    &NoopContentProducer{},
 		// TusHandler left nil — only tested for non-TUS routes here
 	}
 }

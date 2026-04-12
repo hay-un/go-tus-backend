@@ -24,6 +24,7 @@ func newTestApp(mockS3 *MockS3Client) *App {
 		BucketName: "default-bucket",
 		S3Endpoint: "http://localhost:9000",
 		Audit:      &NoopAuditProducer{},
+		Content:    &NoopContentProducer{},
 	}
 }
 
@@ -1402,7 +1403,7 @@ func TestDeleteBucketHandler_ShouldReturn500_WhenTrashFails(t *testing.T) {
 
 func TestListBucketTrashHandler_ShouldReturn503_WhenSharesNil(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	r := httptest.NewRequest(http.MethodGet, "/buckets/trash", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", Email: "user@test.com"})
 	w := httptest.NewRecorder()
@@ -1418,7 +1419,7 @@ func TestListBucketTrashHandler_ShouldReturn401_WhenNoClaims(t *testing.T) {
 	// Arrange
 	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	defer sharesServer.Close()
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodGet, "/buckets/trash", nil)
 	// no claims injected
 	w := httptest.NewRecorder()
@@ -1438,7 +1439,7 @@ func TestListBucketTrashHandler_ShouldReturn200_WhenAuthorized(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodGet, "/buckets/trash", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", Email: "user@test.com"})
 	w := httptest.NewRecorder()
@@ -1458,7 +1459,7 @@ func TestListBucketTrashHandler_ShouldReturn500_WhenSharesFails(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodGet, "/buckets/trash", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", Email: "user@test.com"})
 	w := httptest.NewRecorder()
@@ -1474,7 +1475,7 @@ func TestListBucketTrashHandler_ShouldReturn500_WhenSharesFails(t *testing.T) {
 
 func TestRestoreBucketHandler_ShouldReturn503_WhenSharesNil(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/restore", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", AllowedBuckets: []string{"my-bucket"}})
 	w := httptest.NewRecorder()
@@ -1490,7 +1491,7 @@ func TestRestoreBucketHandler_ShouldReturn403_WhenNotOwner(t *testing.T) {
 	// Arrange
 	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	defer sharesServer.Close()
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodPost, "/buckets/other-bucket/restore", nil)
 	// user only owns "my-bucket", not "other-bucket"
 	r = injectClaims(r, &Claims{Subject: "user-uuid", AllowedBuckets: []string{"my-bucket"}, Role: "user"})
@@ -1510,7 +1511,7 @@ func TestRestoreBucketHandler_ShouldReturn204_WhenRestored(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/restore", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", AllowedBuckets: []string{"my-bucket"}, Role: "user"})
 	w := httptest.NewRecorder()
@@ -1530,7 +1531,7 @@ func TestRestoreBucketHandler_ShouldReturn404_WhenNotInTrash(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/restore", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", AllowedBuckets: []string{"my-bucket"}, Role: "user"})
 	w := httptest.NewRecorder()
@@ -1549,7 +1550,7 @@ func TestRestoreBucketHandler_ShouldReturn500_WhenRestoreFails(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/restore", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", AllowedBuckets: []string{"my-bucket"}, Role: "user"})
 	w := httptest.NewRecorder()
@@ -1571,7 +1572,7 @@ func TestCanAccessBucket_ShouldReturnFalse_WhenBucketIsInTrash(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	claims := &Claims{Subject: "u", Email: "u@test.com", AllowedBuckets: []string{"my-bucket"}, Role: "user"}
 
 	// Act
@@ -1583,7 +1584,7 @@ func TestCanAccessBucket_ShouldReturnFalse_WhenBucketIsInTrash(t *testing.T) {
 
 func TestCanAccessBucket_ShouldReturnTrue_WhenHomeBucket(t *testing.T) {
 	// Arrange — claims have no explicit allowedBuckets, but email matches home bucket
-	app := &App{Audit: &NoopAuditProducer{}} // Shares=nil
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}} // Shares=nil
 	claims := &Claims{Subject: "u", Email: "ridho@gmail.com", AllowedBuckets: []string{}, Role: "user"}
 
 	// Act
@@ -1595,7 +1596,7 @@ func TestCanAccessBucket_ShouldReturnTrue_WhenHomeBucket(t *testing.T) {
 
 func TestCanAccessBucket_ShouldReturnFalse_WhenSharesNilAndNoMatch(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}} // Shares=nil
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}} // Shares=nil
 	claims := &Claims{Subject: "u", Email: "ridho@gmail.com", AllowedBuckets: []string{}, Role: "user"}
 
 	// Act
@@ -1619,7 +1620,7 @@ func TestCanAccessBucket_ShouldReturnTrue_WhenSharesGrantsAccess(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	// User has no JWT allowedBuckets for this bucket
 	claims := &Claims{Subject: "sharee-uuid", Email: "sharee@test.com", AllowedBuckets: []string{}, Role: "user"}
 
@@ -1642,7 +1643,7 @@ func TestCanAccessBucket_ShouldReturnFalse_WhenSharesCheckFails(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	claims := &Claims{Subject: "u", Email: "u@test.com", AllowedBuckets: []string{}, Role: "user"}
 
 	// Act
@@ -1664,7 +1665,7 @@ func TestCanAccessBucket_ShouldReturnFalse_WhenEmailEmpty(t *testing.T) {
 	}))
 	defer sharesServer.Close()
 
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient(sharesServer.URL, "sec")}
 	claims := &Claims{Subject: "u", Email: "", AllowedBuckets: []string{}, Role: "user"}
 
 	// Act

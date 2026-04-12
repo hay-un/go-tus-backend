@@ -14,8 +14,9 @@ import (
 // newSharesApp creates an App with a mock go-shares server.
 func newSharesApp(sharesURL string) *App {
 	return &App{
-		Audit:  &NoopAuditProducer{},
-		Shares: NewSharesClient(sharesURL, "test-secret"),
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
+		Shares:  NewSharesClient(sharesURL, "test-secret"),
 	}
 }
 
@@ -23,7 +24,7 @@ func newSharesApp(sharesURL string) *App {
 
 func TestSharesItemHandler_ShouldReturn503_WhenSharesNil(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: nil}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: nil}
 	r := httptest.NewRequest(http.MethodGet, "/buckets/my-bucket/shares", nil)
 	r = injectClaims(r, &Claims{Subject: "owner-uuid", AllowedBuckets: []string{"my-bucket"}})
 	w := httptest.NewRecorder()
@@ -37,7 +38,7 @@ func TestSharesItemHandler_ShouldReturn503_WhenSharesNil(t *testing.T) {
 
 func TestSharesItemHandler_ShouldReturn400_WhenBucketEmpty(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient("http://unused", "s")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient("http://unused", "s")}
 	r := httptest.NewRequest(http.MethodGet, "/buckets//shares", nil)
 	r = injectClaims(r, &Claims{Subject: "owner-uuid", AllowedBuckets: []string{"*"}})
 	w := httptest.NewRecorder()
@@ -51,7 +52,7 @@ func TestSharesItemHandler_ShouldReturn400_WhenBucketEmpty(t *testing.T) {
 
 func TestSharesItemHandler_ShouldReturn403_WhenNotOwner(t *testing.T) {
 	// Arrange — non-owner (no wildcard, bucket not in list)
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient("http://unused", "s")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient("http://unused", "s")}
 	r := httptest.NewRequest(http.MethodGet, "/buckets/other-bucket/shares", nil)
 	r = injectClaims(r, &Claims{Subject: "user-uuid", AllowedBuckets: []string{"user-uuid-files"}})
 	w := httptest.NewRecorder()
@@ -134,7 +135,7 @@ func TestSharesItemHandler_ShouldReturn201_WhenCreateShareSucceeds(t *testing.T)
 
 func TestSharesItemHandler_ShouldReturn400_WhenShareeEmailMissing(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient("http://unused", "s")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient("http://unused", "s")}
 	body := `{"permission":"read"}`
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/shares", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -150,7 +151,7 @@ func TestSharesItemHandler_ShouldReturn400_WhenShareeEmailMissing(t *testing.T) 
 
 func TestSharesItemHandler_ShouldReturn400_WhenPermissionInvalid(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient("http://unused", "s")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient("http://unused", "s")}
 	body := `{"shareeEmail":"rosa@example.com","permission":"superadmin"}`
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/shares", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -186,7 +187,7 @@ func TestSharesItemHandler_ShouldReturn409_WhenShareAlreadyExists(t *testing.T) 
 
 func TestSharesItemHandler_ShouldReturn400_WhenInvalidJSON(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: NewSharesClient("http://unused", "s")}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: NewSharesClient("http://unused", "s")}
 	r := httptest.NewRequest(http.MethodPost, "/buckets/my-bucket/shares", strings.NewReader("{bad json"))
 	r.Header.Set("Content-Type", "application/json")
 	r = injectClaims(r, &Claims{Subject: "owner-uuid", AllowedBuckets: []string{"my-bucket"}})

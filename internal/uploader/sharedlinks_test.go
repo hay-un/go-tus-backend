@@ -13,7 +13,7 @@ import (
 
 func TestListSharedLinksHandler_ShouldReturn401_WhenNoClaims(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"data":[],"total":0,"page":1,"limit":20}`)) //nolint:errcheck
@@ -33,7 +33,7 @@ func TestListSharedLinksHandler_ShouldReturn401_WhenNoClaims(t *testing.T) {
 
 func TestListSharedLinksHandler_ShouldReturn503_WhenSharesNil(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: nil}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: nil}
 	r := httptest.NewRequest(http.MethodGet, "/files/shared-links", nil)
 	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"user-1-files"}})
 	w := httptest.NewRecorder()
@@ -73,7 +73,8 @@ func TestListSharedLinksHandler_ShouldReturnPaginatedLinks_WhenSuccessful(t *tes
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/files/shared-links?page=1&limit=20", nil)
@@ -120,7 +121,8 @@ func TestListSharedLinksHandler_ShouldMarkLinkAsExpired_WhenExpiresAtInPast(t *t
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/files/shared-links", nil)
@@ -142,7 +144,7 @@ func TestListSharedLinksHandler_ShouldMarkLinkAsExpired_WhenExpiresAtInPast(t *t
 
 func TestDeleteSharedLinkHandler_ShouldReturn401_WhenNoClaims(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}}
 	sharesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -161,7 +163,7 @@ func TestDeleteSharedLinkHandler_ShouldReturn401_WhenNoClaims(t *testing.T) {
 
 func TestDeleteSharedLinkHandler_ShouldReturn503_WhenSharesNil(t *testing.T) {
 	// Arrange
-	app := &App{Audit: &NoopAuditProducer{}, Shares: nil}
+	app := &App{Audit: &NoopAuditProducer{}, Content: &NoopContentProducer{}, Shares: nil}
 	r := httptest.NewRequest(http.MethodDelete, "/files/shared-links/link-1", nil)
 	r = injectClaims(r, &Claims{Subject: "user-1", AllowedBuckets: []string{"rosa-files"}})
 	w := httptest.NewRecorder()
@@ -183,7 +185,8 @@ func TestDeleteSharedLinkHandler_ShouldReturn204_WhenSuccessful(t *testing.T) {
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodDelete, "/files/shared-links/link-1", nil)
@@ -207,7 +210,8 @@ func TestDeleteSharedLinkHandler_ShouldReturn404_WhenNotFound(t *testing.T) {
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodDelete, "/files/shared-links/no-such", nil)
@@ -224,7 +228,8 @@ func TestDeleteSharedLinkHandler_ShouldReturn404_WhenNotFound(t *testing.T) {
 func TestDeleteSharedLinkHandler_ShouldReturn400_WhenIDEmpty(t *testing.T) {
 	// Arrange
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient("http://unused", "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodDelete, "/files/shared-links/", nil)
@@ -247,7 +252,8 @@ func TestListSharedLinksHandler_ShouldReturn500_WhenListSharedLinksFails(t *test
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/files/shared-links", nil)
@@ -270,7 +276,8 @@ func TestDeleteSharedLinkHandler_ShouldReturn500_WhenDeleteFails(t *testing.T) {
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodDelete, "/files/shared-links/link-1", nil)
@@ -292,7 +299,8 @@ func TestListSharedLinksHandler_ShouldReturn500_WhenSharesReturnsNonOK(t *testin
 	defer sharesServer.Close()
 
 	app := &App{
-		Audit:  &NoopAuditProducer{},
+		Audit:   &NoopAuditProducer{},
+		Content: &NoopContentProducer{},
 		Shares: NewSharesClient(sharesServer.URL, "test-secret"),
 	}
 	r := httptest.NewRequest(http.MethodGet, "/files/shared-links", nil)

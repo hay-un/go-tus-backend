@@ -106,7 +106,7 @@ func TestEmitAudit_ShouldNotBlock_WhenKafkaDown(t *testing.T) {
 	// Arrange: a slow writer that blocks for 1 second
 	slowWriter := &slowKafkaWriter{delay: time.Second}
 	p := uploader.NewKafkaAuditProducerWithWriter(slowWriter)
-	app := &uploader.App{Audit: p}
+	app := &uploader.App{Audit: p, Content: &uploader.NoopContentProducer{}}
 
 	r := httptest.NewRequest("GET", "/files/bucket/key", nil)
 
